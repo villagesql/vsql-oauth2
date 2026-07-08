@@ -1,0 +1,54 @@
+#
+# Install and configure the verification key + issuer. auto_create is OFF
+# by default.
+#
+INSTALL EXTENSION vsql_oauth2;
+#
+# Precondition: the token's account does not exist.
+#
+SELECT COUNT(*) AS exists_before FROM mysql.user WHERE user = 'oidc_autocreated';
+exists_before
+0
+#
+# (1) auto_create OFF: a valid token for an unknown account is denied --
+# the server does not route an unknown account to the method -- and the
+# account is NOT created.
+#
+# The login must FAIL; the exact client error is NOT asserted. With
+# auto_create OFF the unknown account is routed to MySQL's anti-enumeration
+# decoy path, which assigns a RANDOM built-in auth plugin (decoy_user in
+# sql_authentication.cc). The client-visible error therefore varies between
+# server processes -- e.g. 1045 "access denied" or 2000 "unknown error" --
+# so asserting a specific one is inherently flaky. The durable assertion is
+# that the account was NOT created.
+#
+
+ERROR: login denied
+# Fail-closed proof: the account does not exist after the denied login.
+SELECT COUNT(*) AS created_while_off FROM mysql.user WHERE user = 'oidc_autocreated';
+created_while_off
+0
+#
+# (2) auto_create ON: the same login provisions the mapped account and the
+# session runs AS it (no proxy). CURRENT_USER is the new account; the
+# original identity is exposed via @@external_user.
+#
+CURRENT_USER()	@@external_user
+oidc_autocreated@%	oidc_autocreated
+#
+# The account now exists, bound to the vsql_oauth2 method.
+#
+SELECT user, host, plugin FROM mysql.user WHERE user = 'oidc_autocreated';
+user	host	plugin
+oidc_autocreated	%	vsql_oauth2
+#
+# A second login for the now-existing account still succeeds (the
+# account_unknown branch is skipped; it authenticates normally).
+#
+CURRENT_USER()
+oidc_autocreated@%
+#
+# Cleanup.
+#
+UNINSTALL EXTENSION vsql_oauth2;
+DROP USER oidc_autocreated;

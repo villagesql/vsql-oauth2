@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Copyright (c) 2026 VillageSQL Contributors
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License, version 2.0,
+# as published by the Free Software Foundation.
+
+# vsql -- interactive VillageSQL login via Google OAuth (vsql_oauth2 extension).
+#
+# A thin, branded wrapper over vsql_google_login.py: it runs the Google
+# browser sign-in, then hands off to the standard `mysql` client with the
+# obtained token. Configure once via environment, then just run `vsql`.
+#
+# Environment (set once, e.g. in your shell profile):
+#   VSQL_CLIENT_SECRETS  path to the GCP client_secret_*.json  (required unless
+#                        VSQL_CLIENT_ID + VSQL_CLIENT_SECRET are set)
+#   VSQL_CLIENT_ID       GCP Desktop OAuth client id     (alt to the file)
+#   VSQL_CLIENT_SECRET   GCP Desktop OAuth client secret (alt to the file)
+#   VSQL_HOST            server host   (default 127.0.0.1)
+#   VSQL_PORT            server port   (default 3306)
+#   VSQL_MYSQL           mysql client binary (default: mysql on PATH)
+#
+# Usage:
+#   vsql                          # interactive shell (browser pop-up)
+#   vsql mydb                     # open a database
+#   vsql -e "SELECT CURRENT_USER()"   # run one statement
+#   vsql mydb < script.sql        # run a script
+#
+# Any arguments are forwarded verbatim to the mysql client.
+
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HELPER="$HERE/vsql_google_login.py"
+
+args=(
+  --mysql       "${VSQL_MYSQL:-mysql}"
+  --mysql-host  "${VSQL_HOST:-127.0.0.1}"
+  --mysql-port  "${VSQL_PORT:-3306}"
+)
+
+if [[ -n "${VSQL_CLIENT_SECRETS:-}" ]]; then
+  args+=(--client-secrets-file "$VSQL_CLIENT_SECRETS")
+elif [[ -n "${VSQL_CLIENT_ID:-}" && -n "${VSQL_CLIENT_SECRET:-}" ]]; then
+  args+=(--client-id "$VSQL_CLIENT_ID" --client-secret "$VSQL_CLIENT_SECRET")
+else
+  echo "vsql: set VSQL_CLIENT_SECRETS (path to the GCP client_secret_*.json)," >&2
+  echo "      or both VSQL_CLIENT_ID and VSQL_CLIENT_SECRET." >&2
+  exit 2
+fi
+
+# Forward any user args through to mysql (the helper passes everything after
+# `--` to the client).
+exec python3 "$HELPER" "${args[@]}" -- "$@"

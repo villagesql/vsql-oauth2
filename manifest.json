@@ -1,0 +1,7 @@
+{
+  "name": "vsql_oauth2",
+  "version": "0.0.1",
+  "description": "OAuth2/OIDC JWT authentication method for VillageSQL",
+  "author": "VillageSQL Contributors",
+  "license": "GPL-2.0"
+}

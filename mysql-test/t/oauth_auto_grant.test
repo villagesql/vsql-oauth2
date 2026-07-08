@@ -1,0 +1,112 @@
+# oauth_auto_grant -- token-driven role membership (auto-GRANT) for vsql_oauth2.
+#
+# ============================================================================
+# TDD SPEC -- this test defines behavior that is NOT YET IMPLEMENTED. It is
+# EXPECTED TO FAIL on current code (today the extension only ACTIVATES roles
+# already granted; it does not grant). It is the definition of done for the
+# auto-grant feature. Do NOT --record it green until the feature lands.
+# ============================================================================
+#
+# Principle (ADDITIVE grant, gated by auto_create; NO revoke in this cut):
+# when auto_create = ON, on EVERY login the claimed roles (after
+# roles_filter/roles_transform) that exist as DB roles are GRANTED to the
+# account -- for existing accounts too, not just at create -- and then
+# activated. Grant is additive: a role no longer claimed is RETAINED (revoke /
+# authoritative reconcile + stale-user/grant cleanup are a separate deferred
+# task). The token does NOT define role permissions -- roles must PRE-EXIST as
+# DBA-defined DB roles; a claimed role that does not exist is skipped (the token
+# carries a group name, not what the role may do). Gating on the existing
+# auto_create sysvar: ON = token is authoritative (create + grant); OFF = DBA
+# owns accounts and grants, token only activates already-granted roles.
+#
+# Config: username_claim=email, roles_claim=groups, roles_filter=app-grp-.*.
+# Pre-signed RS256 tokens (fixed test keypair), email=alice@myco.example, three
+# group sets to exercise grant-on-create / add-on-login / retain-on-drop.
+
+--source include/not_windows.inc
+
+# The server logs a warning when the token claims a role that is not granted to
+# the account and the extension can only ACTIVATE (not grant) it. That warning
+# is EXPECTED here: pre-feature it fires for every claimed role (nothing is
+# granted yet); post-feature it only fires for a claimed role that does not
+# exist as a DB role (skip-if-absent). Suppress it so the test is judged on the
+# role_edges membership behavior, not on this log line.
+call mtr.add_suppression("VEF auth: role .* is not granted; skipping");
+
+--let $pubkey= -----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmB06JnqEgmlMlvy26g4D\ngZmOAk0/jPX+I4t+0moxAOrghC1OZ1XfIkFzx2OGjNFN+rcmHMm+WyBoVth6v7hO\n1Woe3YktF+CNsVgsYkbNaVqdy9ZKpH4tqiT73mLXzmghlBA3RZDRq/npdzHcnINb\nGeuBZ+948y+Bv6Tb5QNsYuMSjdEMT/a7uQ9Ffz/HWaVUz5wiMCEi84S62SbJVe5X\nr/jZ4CB7ujEAQBQLN3lcG6HzB3KTEsmNvKSath/r3nmnVsJsrNTwcbaurExHuqkL\nkFxnj4Fq+9UaAyd3ntVST3MvdhmqlmPTF0OPQNSv1S72ZJIJLlJ+x86Teb4tGQoa\nNQIDAQAB\n-----END PUBLIC KEY-----\n
+
+# email=alice@myco.example, groups=[app-grp-dba]
+--let $t_dba= eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6ImFsaWNlQG15Y28uZXhhbXBsZSIsImlzcyI6Imh0dHBzOi8vaWRwLmV4YW1wbGUiLCJleHAiOjk5OTk5OTk5OTksImdyb3VwcyI6WyJhcHAtZ3JwLWRiYSJdfQ.Wstj8Ty32JFjMvUaeqbVAy7Gp60fDEdmm4dNdif0ECFOzKrPT3tF-ZwAeDUQFDEzduJIqJL_QFGQUdQayEPRxtunNzgIAUASgayQd5Idtq9Yfk0ojLN4ygzitNFbmHEUcJlJqQJth2HCoUAMiPp31A4AMR4zLTleSO-jcBt_T5mGTd3qtIvshWilS-oTp3nxSCfagYf1FAd1Scvt9UPfwU33mB-sdvGxNu0Pphb6DK5KDSbIKINnyWYYJFvoYQGHpn0l0ZUx6SACmRY1DmqNMwdbvWADMTyxw2gVRv5Lk_8C9J-p-eL9lWFuEe0o6z8TJl9hEyjdYCwNJcjMxVL0MA
+
+# groups=[app-grp-dba, app-grp-analyst]
+--let $t_dba_ana= eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6ImFsaWNlQG15Y28uZXhhbXBsZSIsImlzcyI6Imh0dHBzOi8vaWRwLmV4YW1wbGUiLCJleHAiOjk5OTk5OTk5OTksImdyb3VwcyI6WyJhcHAtZ3JwLWRiYSIsImFwcC1ncnAtYW5hbHlzdCJdfQ.TIwp-Jqk4BIiV4hA_vHEWo0cu7dS7VOFo8IBITxDab_KVSlCpXOm7u7jmw0RdTSrolxuuezBW_SOEuB6z5ssr0I26scIztXICnjAAn-bWT3DI8cTnm5VtJXpLXo-yWjui4KS4ND4sYOiciN62I6QQet4RyXHhBAICu-WbMSXhHNOzyy4Gv8DPMRBReL7o2RBmXIMSZ8oKNYdOkQ9NIydHzZKaqFaII8HYEbGp9_ulOsWOeOSTDOCI7pwkWdqtyjNl8oux84LtbeyxZVvhNM-e0k0pC_hg5B04_0YeUIOwGa4R8q4BefXGH1wUORmWIB4q8Sfs9hcrXQWaK1OV4a_hA
+
+# groups=[app-grp-analyst]  (dba dropped -> RETAINED, no revoke)
+--let $t_ana= eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6ImFsaWNlQG15Y28uZXhhbXBsZSIsImlzcyI6Imh0dHBzOi8vaWRwLmV4YW1wbGUiLCJleHAiOjk5OTk5OTk5OTksImdyb3VwcyI6WyJhcHAtZ3JwLWFuYWx5c3QiXX0.V5eN6823QS74KW60Lgpyx88o-snLylQolu3Z_cb3ZFyiSaizATH27N0-atxvmwMHE8UrrwN63dRBpqV9-DDN1WYapo8B_KyBN6KPi3qzSWtFRXvEQufu31jvO9JNjFxi0sUU50PHWO9tXUfg-N9J0r-2_kFss-SXpfWt5dBJGzQWRGtAyyhSJcMUqABwoV7Lddk3WSQ3r6iS0_vnXma0gc2d598Uir0WqIwbKwvDj0XF37jHut64oiddjqS3NZbOEa_rXfQmsSAc1CgE2TK-P0Mymbb9F5Dnpx24swB0YuaeJWCvRf-rfHwU8qDqca2Nw-v392sBShyJOGKScSquJw
+
+--echo #
+--echo # Setup: verification key + claim config. Roles PRE-EXIST (the DBA defines
+--echo # them; the token only grants membership). auto_create ON.
+--echo #
+INSTALL EXTENSION vsql_oauth2;
+--disable_query_log
+eval SET GLOBAL vsql_oauth2.public_key = '$pubkey';
+SET GLOBAL vsql_oauth2.issuer = 'https://idp.example';
+SET GLOBAL vsql_oauth2.username_claim = 'email';
+SET GLOBAL vsql_oauth2.roles_claim = 'groups';
+SET GLOBAL vsql_oauth2.roles_filter = 'app-grp-.*';
+SET GLOBAL vsql_oauth2.auto_create = ON;
+--enable_query_log
+
+CREATE ROLE `app-grp-dba`;
+CREATE ROLE `app-grp-analyst`;
+
+--echo #
+--echo # (1) First login: unknown account auto-created AND granted the claimed
+--echo # role, which is then ACTIVATED for the session. Expect membership
+--echo # {app-grp-dba} (role_edges) and ACTIVE roles {app-grp-dba}.
+--echo #
+--echo # Active roles are read from information_schema.ENABLED_ROLES (one row per
+--echo # active role, so ORDER BY makes the result deterministic) INSIDE alice's
+--echo # authenticated session -- CURRENT_ROLE() is a single server-ordered
+--echo # scalar and cannot be ordered.
+--exec $MYSQL --enable_cleartext_plugin --user='alice@myco.example' --password=$t_dba -e "SELECT CURRENT_USER(); SELECT ROLE_NAME, ROLE_HOST FROM information_schema.ENABLED_ROLES ORDER BY ROLE_NAME, ROLE_HOST"
+--sorted_result
+SELECT FROM_USER, TO_USER FROM mysql.role_edges WHERE TO_USER = 'alice@myco.example';
+
+--echo #
+--echo # (2) Second login, claim adds analyst. Both granted and both activated.
+--echo # Expect membership {dba, analyst} and ACTIVE roles {analyst, dba}
+--echo # (ordered by the ENABLED_ROLES query, so multi-role order is stable).
+--echo #
+--exec $MYSQL --enable_cleartext_plugin --user='alice@myco.example' --password=$t_dba_ana -e "SELECT CURRENT_USER(); SELECT ROLE_NAME, ROLE_HOST FROM information_schema.ENABLED_ROLES ORDER BY ROLE_NAME, ROLE_HOST"
+--sorted_result
+SELECT FROM_USER, TO_USER FROM mysql.role_edges WHERE TO_USER = 'alice@myco.example';
+
+--echo #
+--echo # (3) Third login, claim drops dba (now only analyst). This shows the
+--echo # GRANT-vs-ACTIVATE distinction:
+--echo #   - GRANT is additive/non-authoritative (no revoke): dba is RETAINED,
+--echo #     so membership (role_edges) stays {dba, analyst}.
+--echo #   - ACTIVATION follows THIS login's claim: only analyst is claimed, so
+--echo #     ACTIVE roles = {app-grp-analyst} ONLY (dba granted but not active).
+--echo # (Revoke / authoritative reconcile is a separate, deferred task -- see
+--echo # memory project_vef_auth_set_active_roles.)
+--echo #
+--exec $MYSQL --enable_cleartext_plugin --user='alice@myco.example' --password=$t_ana -e "SELECT CURRENT_USER(); SELECT ROLE_NAME, ROLE_HOST FROM information_schema.ENABLED_ROLES ORDER BY ROLE_NAME, ROLE_HOST"
+--sorted_result
+SELECT FROM_USER, TO_USER FROM mysql.role_edges WHERE TO_USER = 'alice@myco.example';
+
+--echo #
+--echo # Cleanup.
+--echo #
+--disable_query_log
+SET GLOBAL vsql_oauth2.auto_create = OFF;
+SET GLOBAL vsql_oauth2.username_claim = 'sub';
+SET GLOBAL vsql_oauth2.roles_claim = '';
+SET GLOBAL vsql_oauth2.roles_filter = '';
+--enable_query_log
+UNINSTALL EXTENSION vsql_oauth2;
+DROP USER `alice@myco.example`;
+DROP ROLE `app-grp-dba`;
+DROP ROLE `app-grp-analyst`;

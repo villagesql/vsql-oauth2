@@ -1,0 +1,75 @@
+# oauth_ecdsa -- ECDSA higher-curve coverage (ES384/P-384 and ES512/P-521) for
+# the vsql_oauth2 auth extension.
+#
+# oauth_basic.test exercises the RS256 path and the full fail-closed matrix
+# (garbage / empty / no-key / cleartext-gating / uninstall). This test covers
+# the ES384 and ES512 branches of the algorithm allow-list -- ES384/P-384 is the
+# path Jump's minter uses. For each alg it asserts the two things unique to it:
+# a genuinely signed token is accepted, and an expired one fails closed.
+#
+# Fixtures are fixed P-384 / P-521 keypairs and pre-signed tokens (sub =
+# oauth_mapped_user, iss = https://idp.example; valid has a far-future exp, the
+# expired one's exp is in the past). Precomputed so the test needs no runtime
+# crypto; the signatures are real, so the extension verifies them for real. The
+# verification key is switched between the ES384 and ES512 blocks.
+
+--source include/not_windows.inc
+
+# --- ES384 / P-384 fixtures ---
+--let $es384_pubkey= -----BEGIN PUBLIC KEY-----\nMHYwEAYHKoZIzj0CAQYFK4EEACIDYgAE5KCrk0YzRF5qbQApX8J6O7CpJ+6QVyuR\nWBKdYCuniU5upUQXxqftc9U2lxoOble09x4w6MsVk7JZAUQMtVTl38EN71xjQNhV\nsAfNUHGZMqfAPm9epKzJ1lXEAvMOUrAP\n-----END PUBLIC KEY-----\n
+--let $es384_valid= eyJhbGciOiJFUzM4NCIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJvYXV0aF9tYXBwZWRfdXNlciIsImlzcyI6Imh0dHBzOi8vaWRwLmV4YW1wbGUiLCJleHAiOjk5OTk5OTk5OTl9.Y05CYlOPhEWvjZXmXlzGLLSpS47nHzkdz-R5ocM9069rZ7RxU9MW5vkYjMaxpE0u0fxK8R2ngZ3iAvnKhxVMtYNtxjJzuCqHVSM8mUuS4e4fgUuZFQmyW922bq57eb5K
+--let $es384_expired= eyJhbGciOiJFUzM4NCIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJvYXV0aF9tYXBwZWRfdXNlciIsImlzcyI6Imh0dHBzOi8vaWRwLmV4YW1wbGUiLCJleHAiOjEwMDAwMDAwMDB9.3x8DAvmIgA30hpItKzwfgDCf6TDyyAZ_bhIkb0ZCs6F1gtTL8QGn0MyxdeFL_-l-7vWfPtK2QX8gMRsY0jGgO6gHrjcO3Vukk5yg6RO2-Xtk63mGj13tJ8vbK5rlIbrn
+
+# --- ES512 / P-521 fixtures ---
+--let $es512_pubkey= -----BEGIN PUBLIC KEY-----\nMIGbMBAGByqGSM49AgEGBSuBBAAjA4GGAAQAFlRzbxR7g67D/7xrlz3RcwHTh5Wz\n4N9lFdsVi4tM31kIXFLkgiNMNAacsIzQsGtNcNsphl4hGprJfMIcr0u9BXYAkdWf\nsLms88Fctj+Fs7Hx5l7Dg4t957iiuZUUbmLdmpsnC2ZWM9ljwa4CFmEfuooIAT5T\nMYYfmOjBLCw2Z1lwduE=\n-----END PUBLIC KEY-----\n
+--let $es512_valid= eyJhbGciOiJFUzUxMiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJvYXV0aF9tYXBwZWRfdXNlciIsImlzcyI6Imh0dHBzOi8vaWRwLmV4YW1wbGUiLCJleHAiOjk5OTk5OTk5OTl9.AEXQWPDd0hNADPYS88lMIzv8roQWPDqAJlFT5nq8HUsVUz5Bhemx3otnl7km52KxMZXIdRRKOI33FoH3y6Rthf8DAVSH2Ubm3UyiAu86eqkXULBbffTeOLGq1lukr10LvCngWOcsfXqRpy9nL_uBO85179fQ-56Zc-FBYCEeFva9unt2
+--let $es512_expired= eyJhbGciOiJFUzUxMiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJvYXV0aF9tYXBwZWRfdXNlciIsImlzcyI6Imh0dHBzOi8vaWRwLmV4YW1wbGUiLCJleHAiOjEwMDAwMDAwMDB9.AGobjAHKcHi4Qg8y-Zry9FAaaWS_J7xK8SusUaaWZyxHHznvEN3tIhTrVan_p5_G10D5MCf73J0L0nT0OzWKPyomASRtXpcPSR7-8Rw62GTHWAaz-9hmD-OQdj62feGgAbSTk3Uff4M4EUGuCBbbPEv5YMbCbBCP6kBXq6KOuPikf4Pu
+
+--echo #
+--echo # Install and create the accounts (shared across both alg blocks).
+--echo #
+INSTALL EXTENSION vsql_oauth2;
+
+--disable_query_log
+SET GLOBAL vsql_oauth2.issuer = 'https://idp.example';
+--enable_query_log
+
+CREATE USER oauth_user IDENTIFIED WITH vsql_oauth2;
+CREATE USER oauth_mapped_user;
+GRANT SELECT ON *.* TO oauth_mapped_user;
+GRANT PROXY ON oauth_mapped_user TO oauth_user;
+
+--echo #
+--echo # ES384: configure the P-384 key.
+--echo #
+--disable_query_log
+eval SET GLOBAL vsql_oauth2.public_key = '$es384_pubkey';
+--enable_query_log
+
+--echo # Valid ES384 token -> accepted; session runs AS the mapped account.
+--exec $MYSQL --enable_cleartext_plugin --user=oauth_user --password=$es384_valid -e "SELECT CURRENT_USER(), @@external_user"
+
+--echo # Expired ES384 token -> fail closed.
+--error 1
+--exec $MYSQL --enable_cleartext_plugin --user=oauth_user --password=$es384_expired -e "SELECT 1" 2>&1
+
+--echo #
+--echo # ES512: switch to the P-521 key.
+--echo #
+--disable_query_log
+eval SET GLOBAL vsql_oauth2.public_key = '$es512_pubkey';
+--enable_query_log
+
+--echo # Valid ES512 token -> accepted; session runs AS the mapped account.
+--exec $MYSQL --enable_cleartext_plugin --user=oauth_user --password=$es512_valid -e "SELECT CURRENT_USER(), @@external_user"
+
+--echo # Expired ES512 token -> fail closed.
+--error 1
+--exec $MYSQL --enable_cleartext_plugin --user=oauth_user --password=$es512_expired -e "SELECT 1" 2>&1
+
+--echo #
+--echo # Cleanup.
+--echo #
+UNINSTALL EXTENSION vsql_oauth2;
+DROP USER oauth_user;
+DROP USER oauth_mapped_user;

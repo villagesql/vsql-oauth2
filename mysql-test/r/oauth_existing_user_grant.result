@@ -1,0 +1,51 @@
+call mtr.add_suppression("VEF auth: role .* is not granted; skipping");
+#
+# Setup. Roles pre-exist. auto_create ON.
+#
+INSTALL EXTENSION vsql_oauth2;
+CREATE ROLE `app-grp-dba`;
+CREATE ROLE `app-grp-legacy`;
+#
+# DBA pre-creates the account (NOT auto-created by a token) and grants it
+# app-grp-legacy -- a role the token will NEVER claim.
+#
+CREATE USER `bob@myco.example` IDENTIFIED WITH vsql_oauth2;
+GRANT `app-grp-legacy` TO `bob@myco.example`;
+SELECT FROM_USER, TO_USER FROM mysql.role_edges WHERE TO_USER = 'bob@myco.example';
+FROM_USER	TO_USER
+app-grp-legacy	bob@myco.example
+#
+# (1) First token login. groups=[app-grp-dba]. Case (a): the grant fires
+# for this PRE-EXISTING (DBA-created) account -> app-grp-dba is added.
+# Case (c): app-grp-legacy (DBA-granted, not claimed) is RETAINED.
+# Expect membership {app-grp-dba, app-grp-legacy}; ACTIVE = {app-grp-dba}
+# (only the claimed role is activated).
+#
+CURRENT_USER()
+bob@myco.example@%
+ROLE_NAME	ROLE_HOST
+app-grp-dba	%
+SELECT FROM_USER, TO_USER FROM mysql.role_edges WHERE TO_USER = 'bob@myco.example';
+FROM_USER	TO_USER
+app-grp-dba	bob@myco.example
+app-grp-legacy	bob@myco.example
+#
+# (2) Second login, same claim. Case (b): re-granting app-grp-dba (already
+# granted) is idempotent -- no error, no duplicate. Membership unchanged
+# {app-grp-dba, app-grp-legacy}.
+#
+CURRENT_USER()
+bob@myco.example@%
+ROLE_NAME	ROLE_HOST
+app-grp-dba	%
+SELECT FROM_USER, TO_USER FROM mysql.role_edges WHERE TO_USER = 'bob@myco.example';
+FROM_USER	TO_USER
+app-grp-dba	bob@myco.example
+app-grp-legacy	bob@myco.example
+#
+# Cleanup.
+#
+UNINSTALL EXTENSION vsql_oauth2;
+DROP USER `bob@myco.example`;
+DROP ROLE `app-grp-dba`;
+DROP ROLE `app-grp-legacy`;
