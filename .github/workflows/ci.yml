@@ -1,0 +1,17 @@
+name: test
+on: [pull_request, workflow_dispatch]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - name: Install OpenSSL and libcurl
+        run: sudo apt-get install -y --no-install-recommends libssl-dev libcurl4-openssl-dev
+      - uses: villagesql/extension-actions/cpp@main
+        with:
+          extension-name: vsql_oauth2
+          github-token: ${{ secrets.GITHUB_TOKEN }}
