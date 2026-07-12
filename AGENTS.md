@@ -60,21 +60,39 @@ no external IdP). See `TESTING.md` for the manual MTR command as well.
   `none` and the HS* family, is rejected before any signature check), `iss`,
   `aud`, `exp`. Maps `username_claim` → account and `roles_claim` → roles via
   `roles_filter`/`roles_transform`. Does no network I/O — the key source is
-  behind `config.resolve_key`, so it is unit-testable with a fake resolver.
+  behind `config.resolve_key`, so it is unit-testable with a fake resolver. Also
+  hosts `token_from_packet(pkt, len, client_plugin)` — a pure helper that
+  extracts the JWT from the raw handshake packet, dispatching on the negotiated
+  client-plugin name (native `authentication_openid_connect_client` framing =
+  `[capability][lenenc][JWT]`; anything else = clear-password-style token + NUL).
 - `jwks_cache.{h,cc}` — JWKS HTTP fetch (libcurl) + JWK→PEM conversion (RSA and
   EC), with a `kid`-keyed cache refreshed on a TTL / unknown-kid.
 
-**Auth flow:** client sends the JWT in the password slot (paired with the
-built-in `mysql_clear_password` client plugin, so the client uses
-`--enable-cleartext-plugin`) → `authenticate` reads it → `oauth_core::evaluate`
-validates + maps → on success the session runs as the mapped account, with the
-original identity exposed via `@@external_user`.
+**Auth flow:** the client sends the JWT → `authenticate` extracts it via
+`token_from_packet` → `oauth_core::evaluate` validates + maps → on success the
+session runs as the mapped account, with the original identity exposed via
+`@@external_user`. Token-mapped roles are activated with `set_active_roles`
+(grant-checked; ungranted names skipped — no escalation). With
+`auto_create = ON`, a valid-token login for an account that does not exist is
+provisioned on the fly (`account_unknown` → `request_provision`) and then runs as
+the new account.
+
+**Client-side token delivery (three ways, all provider-agnostic to the server):**
+(a) built-in `mysql_clear_password` — JWT in the password slot (needs
+`--enable-cleartext-plugin`); universal. (b) `vsql_oauth_client` — VillageSQL's
+own client plugin (lives in the SERVER repo `libmysql/vsql_oauth_client/`, since
+only the client build ships a client `.so`; the extension ships only a `.veb`);
+fetches the token from `$VSQL_OAUTH_TOKEN_FILE` or `$VSQL_OAUTH_TOKEN_HELPER`, so it is
+off the command line. (c) a stock MySQL 9.1+ client's own
+`authentication_openid_connect_client` (token file) — the server accepts its
+framing too. See README "Logging in".
 
 **Config (sysvars, `vsql_oauth2.*`):** `issuer`, `audience`, `public_key`,
 `jwks_url`, `jwks_refresh_interval`, `jwks_http_timeout`, `username_claim`,
 `roles_claim`, `roles_filter`, `roles_transform_pattern`,
-`roles_transform_replacement`. Integer sysvars use `int64_t` backing globals to
-match the SDK's fixed-width ABI.
+`roles_transform_replacement`, and `auto_create` (bool). Integer sysvars use
+`int64_t` backing globals to match the SDK's fixed-width ABI; `auto_create` uses
+a `bool` backing global via `sv::make_bool`.
 
 **Fail closed:** any validation failure, missing key source, or malformed token
 denies the connection. Only an explicit accept authenticates.
@@ -87,6 +105,11 @@ files live in `mysql-test/t/` (`.test`) and `mysql-test/r/` (`.result`).
 - `oauth_basic` — installs the method, binds an account, and drives login with
   pre-signed RS256 tokens: valid token accepted (maps to the account), and
   expired / malformed / empty / no-key-source all fail closed. Fully hermetic.
+- `oauth_client_plugin` — drives login through the `vsql_oauth_client` plugin in
+  token-file mode (`$VSQL_OAUTH_TOKEN_FILE`) instead of the password slot. Skips
+  cleanly if the plugin was not built (needs the server configured with
+  `-DWITH_AUTHENTICATION_CLIENT_PLUGINS=ON`; gated via the `VSQL_OAUTH_CLIENT`
+  entry in the server's `mysql-test/include/plugin.defs`).
 
 Regenerate expected results with `RECORD=1 ./test.sh` after an intended change.
 
@@ -113,10 +136,12 @@ All source files (`.cc`, `.h`) and `CMakeLists.txt` must carry this header:
 
 ## Common Tasks for AI Agents
 
-- **Adding a config knob**: add an `int64_t`/`char*` global + a `sv::make_int`/
-  `make_str` entry in `extension.cc`, thread it into `oauth_core::Config` in
-  `build_config`, and consume it in `oauth_core.cc`. Integer sysvars must use
-  `int64_t` (the SDK's `make_int` takes `int64_t*`).
+- **Adding a config knob**: add a backing global + a matching `sv::make_*` entry
+  in `extension.cc`, thread it into `oauth_core::Config` in `build_config`, and
+  consume it in `oauth_core.cc`. Type must match the factory: `int64_t*` for
+  `make_int`, `char**` for `make_str`, `bool*` for `make_bool` (e.g.
+  `auto_create`). A knob queried live by the server per-login (like the
+  `auto_create_unknown_accounts` opt-in callback) reads the global directly.
 - **Changing validation**: edit `oauth_core::evaluate`; keep fail-closed —
   reject unknown algs before any signature check.
 - **Role mapping**: `roles_filter`/`roles_transform` in `oauth_core.cc`. Note

@@ -1,0 +1,92 @@
+# End-to-end test of the vsql_oauth2 auth extension driven by VillageSQL's own
+# client-side auth plugin, vsql_oauth_client (in the server repo's libmysql/),
+# in TOKEN-FILE mode -- as opposed to the token-in-password-slot /
+# mysql_clear_password path exercised by oauth_basic.test.
+#
+# Proves: a client using the vsql_oauth_client plugin authenticates against the
+# vsql_oauth2 SERVER extension. The plugin reads the JWT from $VSQL_OAUTH_TOKEN_FILE
+# (its static-token mode; its other mode runs $VSQL_OAUTH_TOKEN_HELPER, not exercised
+# here since that needs a live IdP) and sends it as one packet (token + NUL) --
+# the clear-password-style framing the server accepts under this method's pinned
+# client-plugin name. mtr connects over the unix socket.
+#
+# Fixtures (the SAME fixed RS256 keypair + pre-signed token as oauth_basic.test)
+# keep the test deterministic with no runtime crypto. sub=oauth_mapped_user,
+# iss=https://idp.example, far-future exp.
+
+--source include/not_windows.inc
+
+# vsql_oauth_client is a client-side plugin built only with
+# -DWITH_AUTHENTICATION_CLIENT_PLUGINS=ON. mtr registers it in
+# include/plugin.defs, which sets $VSQL_OAUTH_CLIENT_OPT to "--plugin-dir=<dir>"
+# when the plugin was built, or "" when it was not. Skip cleanly in the latter
+# case (a build without that flag) rather than fail. The plugin's default dir is
+# the install path, not the build tree, so $VSQL_OAUTH_CLIENT_OPT (which carries
+# --plugin-dir) must be passed on each client invocation.
+if (!$VSQL_OAUTH_CLIENT_OPT)
+{
+  --skip vsql_oauth_client not built (needs -DWITH_AUTHENTICATION_CLIENT_PLUGINS=ON)
+}
+
+# Fixed test public key (matches the private key that signed the token below).
+--let $pubkey= -----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzN6+QxBZ9p6bUI9Lod/5\nIYtXA3gQ4E+LmtX9jTHSk0EGuaiLYmxNCTifTpqfYJkwjctE8keMDhouCP2CraK0\nkmULDkuF8dbVaK6MXHFjew0yu3K8MCtWbDWTgazszYKvEH3+wDZ1dU7W595KpQSb\nPKiV46LGXIXkAHUtYTJzNmr3ObEbgQFARbAqQa9RLaJwUgSOYOW0qf8TWrRol84B\nZvFle32tJ/xUv9V4ae1ccK4Pbzn0FRymbW1T7JLt7hp/xX2qzQ/KI/1JHoCQkFoz\nfvEt0TGQN1qOo2lrqQjDamQW+W67B9hS5h8Ul/A1TH2p4Xz0wJYrenH8AHaXqyqD\n7wIDAQAB\n-----END PUBLIC KEY-----\n
+
+# Pre-signed token (RS256). sub=oauth_mapped_user, iss=https://idp.example.
+--let $valid_token= eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJvYXV0aF9tYXBwZWRfdXNlciIsImlzcyI6Imh0dHBzOi8vaWRwLmV4YW1wbGUiLCJleHAiOjk5OTk5OTk5OTl9.jzmGoHnGE7rqoKcHJIlKOiMlBJ-GgPQf8ayCqymCC7BCpujCa8AfklKg48TZQnvejpUrW4yUEtQu0hDTTTMH-ZJC5uWOLyUJ4gXXDBjO2k3skOPmDkDP2nFAbUuxLdDaI_qxwMkj4ze-kYaL1FHn_Q1nTVtUdJg-B37ZvINycvkIHlCREMaloOfCT1hY77dUCiYPobExfLCtY9MC6hMwex2uXaHNvMD0ShW16xW6DVGU3dl84avfA8ODJs2qfD6Bry3QAcvfRsqkyc6TohsljTFVH-TTOgFk2D-0KETK0VGxwDWbnHA-EvbhdAoNucu3RZ-fH0sGJ9KLZRWgPP_-sg
+
+# Write the token to a file for the plugin to read (VSQL_OAUTH_TOKEN_FILE mode).
+# --exec so mtr expands $valid_token; printf (no trailing newline) keeps it bare.
+--let $token_file= $MYSQLTEST_VARDIR/tmp/vsql_oauth_token.jwt
+--exec printf '%s' $valid_token > $token_file
+
+--echo #
+--echo # Install the OAuth extension and configure the verification key + issuer.
+--echo #
+INSTALL EXTENSION vsql_oauth2;
+
+--disable_query_log
+eval SET GLOBAL vsql_oauth2.public_key = '$pubkey';
+SET GLOBAL vsql_oauth2.issuer = 'https://idp.example';
+--enable_query_log
+
+--echo #
+--echo # The token maps (sub claim) to oauth_mapped_user; that account must exist
+--echo # and the connecting account must be allowed to proxy onto it.
+--echo #
+CREATE USER oauth_user IDENTIFIED WITH vsql_oauth2;
+CREATE USER oauth_mapped_user;
+GRANT SELECT ON *.* TO oauth_mapped_user;
+GRANT PROXY ON oauth_mapped_user TO oauth_user;
+
+--echo #
+--echo # vsql_oauth_client reads the token file and sends it -> accepted. The
+--echo # session runs AS the mapped account (proxy). Token delivered by our
+--echo # client plugin, not clear_password.
+--echo #
+# Export as an ENV var (bare `let`, not --let) so the client's plugin subprocess
+# sees it; the plugin reads $VSQL_OAUTH_TOKEN_FILE from the environment.
+let VSQL_OAUTH_TOKEN_FILE= $token_file;
+--exec $MYSQL $VSQL_OAUTH_CLIENT_OPT --default-auth=vsql_oauth_client --user=oauth_user -e "SELECT CURRENT_USER(), @@external_user"
+
+--echo #
+--echo # A token file that is not a valid JWT: the server rejects the credential
+--echo # -> login fails closed.
+--echo #
+--exec printf '%s' "not-a-jwt" > $token_file
+--error 1
+--exec $MYSQL $VSQL_OAUTH_CLIENT_OPT --default-auth=vsql_oauth_client --user=oauth_user -e "SELECT 1" 2>&1
+
+--echo #
+--echo # A missing token file: the plugin cannot read a token -> fail closed.
+--echo #
+let VSQL_OAUTH_TOKEN_FILE= $MYSQLTEST_VARDIR/tmp/does_not_exist.jwt;
+--error 1
+--exec $MYSQL $VSQL_OAUTH_CLIENT_OPT --default-auth=vsql_oauth_client --user=oauth_user -e "SELECT 1" 2>&1
+
+--echo #
+--echo # Cleanup.
+--echo #
+UNINSTALL EXTENSION vsql_oauth2;
+DROP USER oauth_user;
+DROP USER oauth_mapped_user;
+--remove_file $token_file

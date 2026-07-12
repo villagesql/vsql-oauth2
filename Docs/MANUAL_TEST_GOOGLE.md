@@ -112,6 +112,15 @@ sysvars to match.
 
 ## Step 3 — Log in as your Google identity
 
+> NOTE: `gcloud auth print-identity-token` is NOT a drop-in token helper here (tested
+> 2026-07-12). Its token's `aud` is gcloud's own client, not your DB app, so the
+> server rejects it; and `--audiences=<db-client-id>` to override is refused for
+> a user identity (`Invalid account type for --audiences. Requires valid service
+> account.`). The helper below authenticates through a dedicated GCP Desktop
+> OAuth client, which is the working path. (A service-account token via gcloud
+> `--audiences` CAN target a custom audience -- relevant only for non-interactive
+> service principals.) See `DESIGN_CLIENT_TOKEN_ACQUISITION.md`.
+
 Pass the OAuth client via the JSON you downloaded from the GCP credentials page
 (keeps the secret off the command line; protect the file with `chmod 600`):
 

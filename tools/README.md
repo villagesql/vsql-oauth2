@@ -1,17 +1,40 @@
 # Client login tools
 
-Helpers for logging into VillageSQL with a Google identity via the `vsql_oauth2`
-extension. The extension validates a JWT presented in the password slot; these
-tools handle *obtaining* the token and handing it to the client.
+Helpers for logging into VillageSQL with an OAuth/OIDC identity via the
+`vsql_oauth2` extension. The extension validates a JWT presented by the client;
+these tools handle *obtaining* the token and handing it to `mysql`.
 
-There are two files:
+## Why these helpers exist (a stock provider CLI is NOT a drop-in token helper)
 
-- **`vsql`** — a branded interactive launcher (browser sign-in, then hands off to
-  the standard `mysql` client). This is the everyday entry point.
-- **`vsql_google_login.py`** — the underlying helper `vsql` calls. Use it
-  directly for one-off flags or to inspect a token (`--print-claims`).
+`vsql_oauth2` is provider-agnostic: it validates whatever signed JWT arrives and
+maps its claims. A token comes from an external, swappable token helper
+(`$VSQL_OAUTH_TOKEN_HELPER`) — see `../Docs/DESIGN_CLIENT_TOKEN_ACQUISITION.md`.
 
-Both use only the Python standard library — no `pip install`.
+It is tempting to assume the stock provider CLI is that token helper
+(`az account get-access-token`, `gcloud auth print-identity-token`). It is NOT,
+by default: those authenticate as the CLI's OWN built-in client app, which is
+not authorized to your DB app's API. Tested against Entra 2026-07-12,
+`az account get-access-token --resource api://<db-app>` fails with
+`AADSTS650057: Invalid resource`. Making it work needs an Entra admin change
+(pre-authorize the Microsoft Azure CLI app to your DB API) -- broad and
+undesirable.
+
+So the DB-app token must be minted through a **dedicated client app** registered
+against the DB API. That is what these helpers do -- and why they are the
+PRIMARY login path, not a fallback:
+
+- **`vsql`** -- branded interactive launcher (browser sign-in, then hands off to
+  `mysql`). Everyday entry point.
+- **`vsql_entra_login.py`** -- authenticates through the dedicated `villagesql-cli`
+  Entra app (pre-authorized to the DB app's scope); cache-first refresh;
+  `--print-claims` / `--print-token`.
+- **`vsql_google_login.py`** -- authenticates through a dedicated GCP Desktop
+  OAuth client (client_secret file). (Follow-up: consolidate the two into one
+  `--provider` tool; see the design doc.)
+
+A stock CLI is a viable token helper ONLY where its client app has been authorized to
+the DB API (an explicit admin decision). All helpers use only the Python
+standard library -- no `pip install`.
 
 ## One-time setup
 
@@ -87,8 +110,10 @@ python3 vsql_google_login.py \
 - **`mysql` not on PATH:** set `VSQL_MYSQL` to the full path of the VillageSQL
   client (dev builds are not on PATH). The launcher reports this clearly rather
   than failing obscurely.
-- **Token lifetime:** Google id_tokens expire (~1 hour); `vsql` fetches a fresh
-  one each run. There is no token caching yet.
+- **Token lifetime / caching:** id_tokens expire (~1 hour). The Entra helper
+  (`vsql_entra_login.py`) has a three-tier cache (reuse -> silent refresh ->
+  browser) at `~/.vsql/oauth_cache.json` (0600). The Google helper currently
+  fetches fresh each run. The provider CLIs (`az`/`gcloud`) have their own caches.
 - **Transport:** the token travels in the password slot in cleartext at the
   protocol level — use TLS to the server in any real setting.
 - **Not the production client:** `vsql` is a dev/demo convenience. For

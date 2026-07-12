@@ -279,7 +279,7 @@ vef_auth_result_t authenticate(vef_auth_ctx_t *ctx, const vef_auth_ops_t *ops) {
 // method. Pin the built-in "mysql_clear_password": it is present in every
 // client/driver, so a naive client (one that does not pass --default-auth) is
 // steered to a plugin it already has and the universal token-in-password-slot
-// path (mysql -p"$(minter)", JDBC, Grafana, service principals) works with no
+// path (mysql -p"$(token-helper)", JDBC, Grafana, service principals) works with no
 // extra artifact.
 //
 // This is only the DEFAULT for naive clients. A client that explicitly selects

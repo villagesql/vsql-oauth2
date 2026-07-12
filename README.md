@@ -76,10 +76,12 @@ GRANT PROXY ON 'alice@example.com' TO oidc_user;
 
 ## Logging in
 
-The extension authenticates a connection from a JWT presented in the password
-slot (via the built-in `mysql_clear_password` client plugin). *Obtaining* that
-token is standard OAuth for your environment; *sending* it is the same across
-all three cases below.
+The extension authenticates a connection from a JWT the client presents.
+*Obtaining* that token is standard OAuth for your environment; *sending* it is
+either (a) in the password slot via the built-in `mysql_clear_password` client
+plugin (universal — works with every client/driver), or (b) via the dedicated
+`vsql_oauth_client` plugin (below), which fetches the token itself so it never
+touches the command line.
 
 ### Interactive shell — `tools/vsql` (browser sign-in)
 
@@ -98,6 +100,42 @@ vsql -e "SELECT CURRENT_USER(), @@external_user"
 
 `CURRENT_USER()` is the mapped account (used for authorization); `@@external_user`
 is the original identity from the token, for the audit trail.
+
+### Client plugin — `vsql_oauth_client` (token off the command line)
+
+`vsql_oauth_client` is a libmysqlclient client-side auth plugin (shipped in the
+VillageSQL server build, under `libmysql/`; built when the server is configured
+with `-DWITH_AUTHENTICATION_CLIENT_PLUGINS=ON`). It obtains the JWT itself and
+sends it during the handshake, so nothing goes on the command line, and — unlike
+`mysql_clear_password` — `--enable-cleartext-plugin` is not needed.
+
+Select it with `--default-auth=vsql_oauth_client` (and `--plugin-dir` if the
+plugin is not in the client's default plugin directory). The token source is
+chosen by environment variable:
+
+```bash
+# Mode 1 — static token file (the token is refreshed by whatever writes the file):
+export VSQL_OAUTH_TOKEN_FILE=/path/to/token.jwt
+mysql --default-auth=vsql_oauth_client --user='alice@example.com' -e "SELECT CURRENT_USER()"
+
+# Mode 2 — run a token helper per connection (gives transparent refresh): the
+# command must print the bare JWT to stdout and exit 0. Defaults to
+# 'vsql_entra_login.py --print-token' if VSQL_OAUTH_TOKEN_HELPER is unset.
+export VSQL_OAUTH_TOKEN_HELPER="python3 /path/to/vsql-oauth2/tools/vsql_entra_login.py --print-token"
+mysql --default-auth=vsql_oauth_client --user='alice@example.com' -e "SELECT CURRENT_USER()"
+```
+
+Environment variables:
+
+| Variable | Purpose |
+|---|---|
+| `VSQL_OAUTH_TOKEN_FILE` | Path to a file containing the bare JWT. If set, takes precedence over the token helper. |
+| `VSQL_OAUTH_TOKEN_HELPER` | Command run per connection whose stdout is the JWT (used when `VSQL_OAUTH_TOKEN_FILE` is unset). Default: `vsql_entra_login.py --print-token`. |
+
+The account must be `IDENTIFIED WITH vsql_oauth2`, which advertises
+`vsql_oauth_client` to the client. (A stock MySQL 9.1+ client's own
+`authentication_openid_connect_client` plugin, using a token file, also works
+against this server — the server accepts either.)
 
 ### Non-interactive scripts
 

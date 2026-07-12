@@ -200,11 +200,13 @@ std::string_view token_from_packet(const unsigned char *pkt, int64_t pkt_len,
   // bitmask (not a format tag), so byte-sniffing would be fragile as
   // capabilities evolve. The plugin name is authoritative.
   if (client_plugin == "authentication_openid_connect_client") {
-    // Framing confirmed against the upstream client plugin source
-    // (libmysql/authentication_openid_connect_client/..._plugin.cc): a 1-byte
-    // capability field, then a MySQL length-encoded-integer length, then the raw
-    // JWT. It writes `unsigned short capability = 1` as one byte, then
-    // net_store_length(token.length()), then the token.
+    // The stock MySQL 9.1+ client plugin (Community; ships with the client, not
+    // this repo). We support it so a stock 9.1+ client can authenticate against
+    // this server with no custom artifact. Its framing (confirmed by decoding a
+    // real packet + reading upstream's client plugin): a 1-byte capability field,
+    // then a MySQL length-encoded-integer length, then the raw JWT -- it writes
+    // `unsigned short capability = 1` as one byte, then net_store_length(len),
+    // then the token.
     uint64_t n = 0;
     const size_t hdr = read_lenenc(pkt + 1, len - 1, &n);  // after the cap byte
     if (hdr == 0) return {};             // malformed length -> fail closed

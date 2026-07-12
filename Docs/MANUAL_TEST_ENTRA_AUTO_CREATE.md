@@ -27,7 +27,7 @@ server-side auto-create flow with a fake auth extension).
 
 Identical to `MANUAL_TEST_ENTRA.md` — two app registrations plus an App-Role
 assignment. See that file for the walkthrough. The IDs from the verified run
-(substitute your own; they also live in `~/.vsql/entra.json` for the minter):
+(substitute your own; they also live in `~/.vsql/entra.json` for the token helper):
 
 | | Value |
 |---|---|
@@ -127,9 +127,10 @@ SHOW GLOBAL VARIABLES LIKE 'vsql_oauth2.%';
 ## Step 3 — log in as the (not-yet-existing) Entra identity
 
 Stock mysql client, token minted on the command line into the password slot
-(`--enable-cleartext-plugin` lets the token travel verbatim). The minter is
-cache-first: if a valid access/refresh token is cached in
-`~/.vsql/oauth_cache.json` there is no browser prompt.
+(`--enable-cleartext-plugin` lets the token travel verbatim). The token helper
+(`vsql_entra_login.py`) authenticates through the dedicated `villagesql-cli` app
+and is cache-first (reuse -> silent refresh -> browser via
+`~/.vsql/oauth_cache.json`), so it usually skips the browser prompt.
 
 ```bash
 "$VillageSQL_BUILD_DIR"/runtime_output_directory/mysql \
@@ -139,6 +140,12 @@ cache-first: if a valid access/refresh token is cached in
   --password="$(python3 /path/to/vsql-oauth2/tools/vsql_entra_login.py --print-token)" \
   -e "SELECT CURRENT_USER() AS who, @@external_user AS ext, CURRENT_ROLE() AS role"
 ```
+
+> NOTE: `az account get-access-token --resource api://<db-app>` does NOT work as
+> a drop-in token helper here — the built-in Azure CLI client app is not authorized to
+> the DB app (`AADSTS650057`, tested 2026-07-12). A stock CLI can only mint a
+> DB-app token if its client app is pre-authorized to the API (an Entra admin
+> change). See `DESIGN_CLIENT_TOKEN_ACQUISITION.md`.
 
 **Success:**
 - `who`  = `you@example.com@%` — the account that did not exist a moment ago

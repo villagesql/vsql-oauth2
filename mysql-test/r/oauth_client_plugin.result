@@ -1,0 +1,34 @@
+#
+# Install the OAuth extension and configure the verification key + issuer.
+#
+INSTALL EXTENSION vsql_oauth2;
+#
+# The token maps (sub claim) to oauth_mapped_user; that account must exist
+# and the connecting account must be allowed to proxy onto it.
+#
+CREATE USER oauth_user IDENTIFIED WITH vsql_oauth2;
+CREATE USER oauth_mapped_user;
+GRANT SELECT ON *.* TO oauth_mapped_user;
+GRANT PROXY ON oauth_mapped_user TO oauth_user;
+#
+# vsql_oauth_client reads the token file and sends it -> accepted. The
+# session runs AS the mapped account (proxy). Token delivered by our
+# client plugin, not clear_password.
+#
+CURRENT_USER()	@@external_user
+oauth_mapped_user@%	oauth_mapped_user
+#
+# A token file that is not a valid JWT: the server rejects the credential
+# -> login fails closed.
+#
+ERROR 1045 (28000): Access denied for user 'oauth_user'@'localhost' (using password: NO)
+#
+# A missing token file: the plugin cannot read a token -> fail closed.
+#
+ERROR 2000 (HY000): Unknown MySQL error
+#
+# Cleanup.
+#
+UNINSTALL EXTENSION vsql_oauth2;
+DROP USER oauth_user;
+DROP USER oauth_mapped_user;

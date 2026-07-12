@@ -141,6 +141,12 @@ GRANT 'mysql-grp-trading' TO 'you@example.com'@'%';
 
 ## Step 3 — log in as your Entra identity and check the role
 
+> NOTE: the stock `az account get-access-token --resource api://<db-app>` does
+> NOT work here — the built-in Microsoft Azure CLI client app is not authorized
+> to the DB app (`AADSTS650057: Invalid resource`, tested 2026-07-12). The token
+> helper below uses the dedicated `villagesql-cli` app that IS pre-authorized, which is
+> why it works. See `DESIGN_CLIENT_TOKEN_ACQUISITION.md`.
+
 ```bash
 python3 tools/vsql_entra_login.py \
   --tenant    <tenant-id> \
