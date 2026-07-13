@@ -24,15 +24,36 @@ namespace vsql_oauth2 {
 
 namespace {
 
+// Cap the JWKS response we will buffer. Real JWKS documents are a few KB (a
+// handful of keys); this leaves generous headroom while bounding memory against
+// a misbehaving or hostile endpoint that streams an unbounded body.
+constexpr size_t kMaxJwksBytes = 512 * 1024;
+
+// Cap redirects we will follow on the JWKS fetch (a JWKS URL should be direct;
+// a redirect chain is either misconfiguration or an attempt to bounce us).
+constexpr long kMaxRedirects = 5;
+
+struct FetchSink {
+  std::string body;
+  bool overflowed = false;
+};
+
 size_t curl_write_cb(char *ptr, size_t size, size_t nmemb, void *userdata) {
-  auto *body = static_cast<std::string *>(userdata);
-  body->append(ptr, size * nmemb);
-  return size * nmemb;
+  auto *sink = static_cast<FetchSink *>(userdata);
+  const size_t n = size * nmemb;
+  if (sink->body.size() + n > kMaxJwksBytes) {
+    // Signal the cap breach and short the transfer: returning a value other
+    // than `n` makes curl abort with CURLE_WRITE_ERROR.
+    sink->overflowed = true;
+    return 0;
+  }
+  sink->body.append(ptr, n);
+  return n;
 }
 
 // GET the JWKS document. Returns true and fills `body` on a 2xx response within
-// the timeout; false otherwise. TLS verification is left at libcurl defaults
-// (peer + host verified) -- a JWKS endpoint is always HTTPS in practice.
+// the timeout and size cap; false otherwise. TLS verification is left at libcurl
+// defaults (peer + host verified) -- a JWKS endpoint is always HTTPS in practice.
 bool http_get(const std::string &url, unsigned int timeout_secs,
               std::string &body, std::string &error_detail) {
   CURL *curl = curl_easy_init();
@@ -41,12 +62,13 @@ bool http_get(const std::string &url, unsigned int timeout_secs,
     return false;
   }
 
-  body.clear();
+  FetchSink sink;
   curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_cb);
-  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &sink);
   curl_easy_setopt(curl, CURLOPT_TIMEOUT, static_cast<long>(timeout_secs));
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+  curl_easy_setopt(curl, CURLOPT_MAXREDIRS, kMaxRedirects);
   curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
 
   const CURLcode rc = curl_easy_perform(curl);
@@ -54,6 +76,13 @@ bool http_get(const std::string &url, unsigned int timeout_secs,
   curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
   curl_easy_cleanup(curl);
 
+  // A write-callback overflow surfaces as CURLE_WRITE_ERROR; report the real
+  // cause rather than the generic curl string.
+  if (sink.overflowed) {
+    error_detail = "JWKS document exceeds " + std::to_string(kMaxJwksBytes) +
+                   " byte cap";
+    return false;
+  }
   if (rc != CURLE_OK) {
     error_detail = std::string("JWKS fetch failed: ") + curl_easy_strerror(rc);
     return false;
@@ -62,6 +91,7 @@ bool http_get(const std::string &url, unsigned int timeout_secs,
     error_detail = "JWKS endpoint returned HTTP " + std::to_string(http_code);
     return false;
   }
+  body = std::move(sink.body);
   return true;
 }
 
@@ -146,14 +176,22 @@ bool JwksCache::refresh_locked(const std::string &jwks_url,
     return false;
 
   std::map<std::string, std::string> fresh;
+  size_t skipped = 0;
   try {
     const auto jwks = jwt::parse_jwks(body);
     for (const auto &key : jwks) {
       if (!key.has_key_id())
         continue;
       const std::string pem = jwk_to_pem(key);
-      if (!pem.empty())
-        fresh[key.get_key_id()] = pem;
+      if (pem.empty()) {
+        // Unsupported kty or malformed key parameters. Don't drop it silently:
+        // a key we can't convert is a JWKS problem the operator should see, not
+        // a benign no-op (silent skip can mask corruption or a rotated-in key
+        // in an alg we don't accept).
+        ++skipped;
+        continue;
+      }
+      fresh[key.get_key_id()] = pem;
     }
   } catch (const std::exception &e) {
     error_detail = std::string("JWKS parse failed: ") + e.what();
@@ -161,8 +199,19 @@ bool JwksCache::refresh_locked(const std::string &jwks_url,
   }
 
   if (fresh.empty()) {
-    error_detail = "JWKS document contained no usable keys";
+    error_detail = skipped > 0
+                       ? "JWKS document had " + std::to_string(skipped) +
+                             " key(s), none convertible (unsupported type or "
+                             "malformed)"
+                       : "JWKS document contained no usable keys";
     return false;
+  }
+  if (skipped > 0) {
+    // Partial success: usable keys exist, but flag the unconvertible ones so a
+    // kid miss on a skipped key is diagnosable rather than mysterious.
+    error_detail = "JWKS: skipped " + std::to_string(skipped) +
+                   " unconvertible key(s); loaded " +
+                   std::to_string(fresh.size());
   }
 
   kid_to_pem_.swap(fresh);
