@@ -293,9 +293,14 @@ vef_auth_result_t authenticate(vef_auth_ctx_t *ctx, const vef_auth_ops_t *ops) {
 // deployment that ships the OIDC client plugin can make IT the zero-config
 // default. See Docs/DESIGN_CLIENT_TOKEN_ACQUISITION.md and
 // Docs/DESIGN_AUTH_METHOD_ENABLED_LIFECYCLE.md.
-vsql::preview_auth::AuthCapability g_auth{"vsql_oauth2", &authenticate,
-                                          "mysql_clear_password",
-                                          &auto_create_enabled};
+constexpr auto AUTH_METHOD =
+    vsql::preview_auth::make_auth<&authenticate>("vsql_oauth2")
+        .pin("mysql_clear_password")
+        .auto_create(&auto_create_enabled)
+        .build();
+// AuthCapability is non-copyable (it self-registers at a fixed address), so
+// construct it in place from the built descriptor.
+vsql::preview_auth::AuthCapability g_auth{AUTH_METHOD};
 
 } // namespace
 
