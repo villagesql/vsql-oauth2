@@ -96,7 +96,9 @@ bool http_get(const std::string &url, unsigned int timeout_secs,
 }
 
 // Convert one JWK to a PEM public key. Supports RSA (n/e) and EC (crv/x/y),
-// covering RS256 and ES256. Returns empty on an unsupported/malformed key.
+// covering the RS* and ES* families (EC works for any curve the JWK carries --
+// P-256/384/521 -- since crv is passed through to the PEM). Returns empty on an
+// unsupported/malformed key.
 std::string jwk_to_pem(const jwt::jwk<jwt::traits::kazuho_picojson> &key) {
   try {
     const std::string kty = key.get_key_type();

@@ -92,21 +92,35 @@ Decision evaluate(const std::string &token, const Config &config) {
       return reject(key_error.empty() ? "could not resolve verification key"
                                       : key_error.c_str());
 
-    // Only RS256 and ES256 are accepted. Reading alg from the token and
-    // dispatching explicitly means alg:none -- and every other algorithm,
-    // including the HS* family that would let an attacker sign with the public
-    // key as an HMAC secret -- is rejected before any signature check.
+    // Only the RSA (RS*) and ECDSA (ES*) SHA-2 families are accepted. Reading
+    // alg from the token and dispatching explicitly means alg:none -- and every
+    // other algorithm, including the HS* family that would let an attacker sign
+    // with the public key as an HMAC secret -- is rejected before any signature
+    // check.
     const std::string alg = decoded.get_algorithm();
 
     auto verifier = jwt::verify();
     if (alg == "RS256") {
       verifier =
           verifier.allow_algorithm(jwt::algorithm::rs256(pem, "", "", ""));
+    } else if (alg == "RS384") {
+      verifier =
+          verifier.allow_algorithm(jwt::algorithm::rs384(pem, "", "", ""));
+    } else if (alg == "RS512") {
+      verifier =
+          verifier.allow_algorithm(jwt::algorithm::rs512(pem, "", "", ""));
     } else if (alg == "ES256") {
       verifier =
           verifier.allow_algorithm(jwt::algorithm::es256(pem, "", "", ""));
+    } else if (alg == "ES384") {
+      verifier =
+          verifier.allow_algorithm(jwt::algorithm::es384(pem, "", "", ""));
+    } else if (alg == "ES512") {
+      verifier =
+          verifier.allow_algorithm(jwt::algorithm::es512(pem, "", "", ""));
     } else {
-      return reject("unsupported or missing alg (only RS256/ES256 allowed)");
+      return reject(
+          "unsupported or missing alg (only RS256/384/512, ES256/384/512)");
     }
 
     // exp is enforced automatically by the verifier. iss/aud are enforced only

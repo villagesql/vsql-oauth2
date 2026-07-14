@@ -212,7 +212,8 @@ instead).
 - **Fail closed**: only an explicitly valid token authenticates. A missing key,
   bad signature, expired token, wrong `iss`/`aud`, or unsupported algorithm
   all deny the connection.
-- **Algorithm pinning**: only `RS256` and `ES256` are accepted. `alg:none` and
+- **Algorithm pinning**: only the RSA (`RS256`/`RS384`/`RS512`) and ECDSA
+  (`ES256`/`ES384`/`ES512`) SHA-2 families are accepted. `alg:none` and
   the `HS*` family (which would let an attacker sign with the public key as an
   HMAC secret) are rejected before any signature check.
 - The token is sent in the password slot in cleartext at the protocol level; use

@@ -1,0 +1,32 @@
+#
+# Install and create the accounts (shared across both alg blocks).
+#
+INSTALL EXTENSION vsql_oauth2;
+CREATE USER oauth_user IDENTIFIED WITH vsql_oauth2;
+CREATE USER oauth_mapped_user;
+GRANT SELECT ON *.* TO oauth_mapped_user;
+GRANT PROXY ON oauth_mapped_user TO oauth_user;
+#
+# ES384: configure the P-384 key.
+#
+# Valid ES384 token -> accepted; session runs AS the mapped account.
+CURRENT_USER()	@@external_user
+oauth_mapped_user@%	oauth_mapped_user
+# Expired ES384 token -> fail closed.
+mysql: [Warning] Using a password on the command line interface can be insecure.
+ERROR 1045 (28000): Access denied for user 'oauth_user'@'localhost' (using password: NO)
+#
+# ES512: switch to the P-521 key.
+#
+# Valid ES512 token -> accepted; session runs AS the mapped account.
+CURRENT_USER()	@@external_user
+oauth_mapped_user@%	oauth_mapped_user
+# Expired ES512 token -> fail closed.
+mysql: [Warning] Using a password on the command line interface can be insecure.
+ERROR 1045 (28000): Access denied for user 'oauth_user'@'localhost' (using password: NO)
+#
+# Cleanup.
+#
+UNINSTALL EXTENSION vsql_oauth2;
+DROP USER oauth_user;
+DROP USER oauth_mapped_user;

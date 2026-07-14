@@ -56,7 +56,8 @@ no external IdP). See `TESTING.md` for the manual MTR command as well.
   bearer token from the handshake, calls `oauth_core::evaluate()`, and maps the
   `Decision` to the auth context (`set_authenticated_as` / `set_external_user`).
 - `oauth_core.{h,cc}` — wrapper-agnostic JWT validation + claim→account/role
-  mapping. Verifies signature (RS256/ES256 only; every other alg, including
+  mapping. Verifies signature (RS/ES SHA-2 families: RS256/384/512,
+  ES256/384/512 only; every other alg, including
   `none` and the HS* family, is rejected before any signature check), `iss`,
   `aud`, `exp`. Maps `username_claim` → account and `roles_claim` → roles via
   `roles_filter`/`roles_transform`. Does no network I/O — the key source is
