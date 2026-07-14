@@ -1,0 +1,63 @@
+call mtr.add_suppression("VEF auth: role .* is not granted; skipping");
+#
+# Setup: verification key + claim config. Roles PRE-EXIST (the DBA defines
+# them; the token only grants membership). auto_create ON.
+#
+INSTALL EXTENSION vsql_oauth2;
+CREATE ROLE `app-grp-dba`;
+CREATE ROLE `app-grp-analyst`;
+#
+# (1) First login: unknown account auto-created AND granted the claimed
+# role, which is then ACTIVATED for the session. Expect membership
+# {app-grp-dba} (role_edges) and ACTIVE roles {app-grp-dba}.
+#
+# Active roles are read from information_schema.ENABLED_ROLES (one row per
+# active role, so ORDER BY makes the result deterministic) INSIDE alice's
+# authenticated session -- CURRENT_ROLE() is a single server-ordered
+# scalar and cannot be ordered.
+CURRENT_USER()
+alice@myco.example@%
+ROLE_NAME	ROLE_HOST
+app-grp-dba	%
+SELECT FROM_USER, TO_USER FROM mysql.role_edges WHERE TO_USER = 'alice@myco.example';
+FROM_USER	TO_USER
+app-grp-dba	alice@myco.example
+#
+# (2) Second login, claim adds analyst. Both granted and both activated.
+# Expect membership {dba, analyst} and ACTIVE roles {analyst, dba}
+# (ordered by the ENABLED_ROLES query, so multi-role order is stable).
+#
+CURRENT_USER()
+alice@myco.example@%
+ROLE_NAME	ROLE_HOST
+app-grp-analyst	%
+app-grp-dba	%
+SELECT FROM_USER, TO_USER FROM mysql.role_edges WHERE TO_USER = 'alice@myco.example';
+FROM_USER	TO_USER
+app-grp-analyst	alice@myco.example
+app-grp-dba	alice@myco.example
+#
+# (3) Third login, claim drops dba (now only analyst). This shows the
+# GRANT-vs-ACTIVATE distinction:
+#   - GRANT is additive/non-authoritative (no revoke): dba is RETAINED,
+#     so membership (role_edges) stays {dba, analyst}.
+#   - ACTIVATION follows THIS login's claim: only analyst is claimed, so
+#     ACTIVE roles = {app-grp-analyst} ONLY (dba granted but not active).
+# (Revoke / authoritative reconcile is a separate, deferred task -- see
+# memory project_vef_auth_set_active_roles.)
+#
+CURRENT_USER()
+alice@myco.example@%
+ROLE_NAME	ROLE_HOST
+app-grp-analyst	%
+SELECT FROM_USER, TO_USER FROM mysql.role_edges WHERE TO_USER = 'alice@myco.example';
+FROM_USER	TO_USER
+app-grp-analyst	alice@myco.example
+app-grp-dba	alice@myco.example
+#
+# Cleanup.
+#
+UNINSTALL EXTENSION vsql_oauth2;
+DROP USER `alice@myco.example`;
+DROP ROLE `app-grp-dba`;
+DROP ROLE `app-grp-analyst`;

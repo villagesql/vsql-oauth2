@@ -1,0 +1,84 @@
+# oauth_existing_user_grant -- token auto-GRANT for a PRE-EXISTING account.
+#
+# Companion to oauth_auto_grant.test (which covers the auto-CREATE path). Here
+# the account and one of its roles are created by the DBA BEFORE any token
+# login, so this exercises the cases that path does not:
+#   (a) grant fires for an account the token did NOT create (gated on the
+#       auto_create opt-in, NOT on account_unknown) -- this is the real-world
+#       "existing user gets a new group in the token" case;
+#   (b) re-granting a role the account already has is idempotent (no error, no
+#       duplicate row);
+#   (c) a role the DBA granted that the token never claims is RETAINED
+#       (additive, no revoke).
+#
+# auto_create = ON gates the grant behavior (token authority). username_claim=
+# email, roles_claim=groups, roles_filter=app-grp-.*. Pre-signed RS256 token,
+# email=bob@myco.example, groups=[app-grp-dba].
+
+--source include/not_windows.inc
+
+call mtr.add_suppression("VEF auth: role .* is not granted; skipping");
+
+--let $pubkey= -----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA3ttOF8bHSN2oY7xpXCIg\nsTiXBr+q84xKvd76k3nBHUzMersfG8e/4ceybaGEK/s9iGAjUG1ruptN53JKbF4S\njaA8F7NMjN5KQK+eb3CvUHsV7kf5WMC4XMqgaaUQcOMqDC21z+Gog8ThHa8E8hz5\ndVLDQCpRF2tWWEtxutEAI5xv40Z+QWGeJyo1s3CikaDIJbc4ex19/UkxcFKKK2hZ\nJJ+Rl2rH8s5vctehRoMY4Pf+ow/ZL55LMM2aX6fdlLJc/bT4eeRrxC5dNKDn7kgs\npXG82v4w96l9SRBSPi1oVxGdT7BCZTgKyAGVgRwPTumfCvEm4oB0NqnQUvOai4Z1\nlwIDAQAB\n-----END PUBLIC KEY-----\n
+
+# email=bob@myco.example, groups=[app-grp-dba]  (never claims app-grp-legacy)
+--let $t_dba= eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6ImJvYkBteWNvLmV4YW1wbGUiLCJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwiZXhwIjo5OTk5OTk5OTk5LCJncm91cHMiOlsiYXBwLWdycC1kYmEiXX0.uB4WdEMUpkahodP_NkHrt2xialXL2v2sbzZ2crtkvO3hYr4EUUUYxFKTKjXrchVxwVw0hCMFr5m8A22Q6Xihyc7XBLIe5ZAhS9rkCLbj1Jk9Z6AWaq_FZN7UkRW7talhnyWuKN8tza4-M_KL7kPjceBorKk26TZXwV0JcMIbHt8pE1SD6JdSG1HpMd4KZKZGGxylIiyo92m04HfWhpxUUiprYvaDpxjhzebIpui9qGwTo88Jmdc4BliaNGdKOlji8LJx050iEsDR6HYBEs-wsE4YDVdzdMz0WWhyrhWOcQCgfmP-HwDvm_oMZmSV3pPvSRIXKVAA_XznepP_t4mprQ
+
+--echo #
+--echo # Setup. Roles pre-exist. auto_create ON.
+--echo #
+INSTALL EXTENSION vsql_oauth2;
+--disable_query_log
+eval SET GLOBAL vsql_oauth2.public_key = '$pubkey';
+SET GLOBAL vsql_oauth2.issuer = 'https://idp.example';
+SET GLOBAL vsql_oauth2.username_claim = 'email';
+SET GLOBAL vsql_oauth2.roles_claim = 'groups';
+SET GLOBAL vsql_oauth2.roles_filter = 'app-grp-.*';
+SET GLOBAL vsql_oauth2.auto_create = ON;
+--enable_query_log
+
+CREATE ROLE `app-grp-dba`;
+CREATE ROLE `app-grp-legacy`;
+
+--echo #
+--echo # DBA pre-creates the account (NOT auto-created by a token) and grants it
+--echo # app-grp-legacy -- a role the token will NEVER claim.
+--echo #
+CREATE USER `bob@myco.example` IDENTIFIED WITH vsql_oauth2;
+GRANT `app-grp-legacy` TO `bob@myco.example`;
+--sorted_result
+SELECT FROM_USER, TO_USER FROM mysql.role_edges WHERE TO_USER = 'bob@myco.example';
+
+--echo #
+--echo # (1) First token login. groups=[app-grp-dba]. Case (a): the grant fires
+--echo # for this PRE-EXISTING (DBA-created) account -> app-grp-dba is added.
+--echo # Case (c): app-grp-legacy (DBA-granted, not claimed) is RETAINED.
+--echo # Expect membership {app-grp-dba, app-grp-legacy}; ACTIVE = {app-grp-dba}
+--echo # (only the claimed role is activated).
+--echo #
+--exec $MYSQL --enable_cleartext_plugin --user='bob@myco.example' --password=$t_dba -e "SELECT CURRENT_USER(); SELECT ROLE_NAME, ROLE_HOST FROM information_schema.ENABLED_ROLES ORDER BY ROLE_NAME, ROLE_HOST"
+--sorted_result
+SELECT FROM_USER, TO_USER FROM mysql.role_edges WHERE TO_USER = 'bob@myco.example';
+
+--echo #
+--echo # (2) Second login, same claim. Case (b): re-granting app-grp-dba (already
+--echo # granted) is idempotent -- no error, no duplicate. Membership unchanged
+--echo # {app-grp-dba, app-grp-legacy}.
+--echo #
+--exec $MYSQL --enable_cleartext_plugin --user='bob@myco.example' --password=$t_dba -e "SELECT CURRENT_USER(); SELECT ROLE_NAME, ROLE_HOST FROM information_schema.ENABLED_ROLES ORDER BY ROLE_NAME, ROLE_HOST"
+--sorted_result
+SELECT FROM_USER, TO_USER FROM mysql.role_edges WHERE TO_USER = 'bob@myco.example';
+
+--echo #
+--echo # Cleanup.
+--echo #
+--disable_query_log
+SET GLOBAL vsql_oauth2.auto_create = OFF;
+SET GLOBAL vsql_oauth2.username_claim = 'sub';
+SET GLOBAL vsql_oauth2.roles_claim = '';
+SET GLOBAL vsql_oauth2.roles_filter = '';
+--enable_query_log
+UNINSTALL EXTENSION vsql_oauth2;
+DROP USER `bob@myco.example`;
+DROP ROLE `app-grp-dba`;
+DROP ROLE `app-grp-legacy`;
