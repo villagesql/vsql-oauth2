@@ -1,0 +1,94 @@
+# oauth_auto_create -- auto-create-on-first-login for the vsql_oauth2 extension.
+#
+# With SET GLOBAL vsql_oauth2.auto_create = ON, a valid-token login for an
+# account that does NOT yet exist is provisioned on the fly (CREATE USER ...
+# IDENTIFIED WITH vsql_oauth2) and the session then runs AS the new account.
+# The account provisioned is the token's mapped identity (username_claim), not
+# the raw handshake user.
+#
+# Full matrix:
+#   1. auto_create OFF (default) + unknown account -> denied (server does not
+#      route an unknown account to the method unless it opts in); account is
+#      NOT created.
+#   2. auto_create ON + unknown account + valid token -> provisioned; login
+#      succeeds AS the new account; the account now exists bound to the method.
+#   3. cleanup.
+#
+# Fixtures: a fixed RS256 keypair and a pre-signed token with
+# sub = oidc_autocreated (the account to be auto-created), iss =
+# https://idp.example, far-future exp. Real signature -> the extension verifies
+# it for real; precomputed -> no runtime crypto.
+
+--source include/not_windows.inc
+
+--let $pubkey= -----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA6nDMvcbBx8lMjSyovU7k\nPEEmpwlnup2IGZ86tg34C4nj76Od7Eh0lpho2C8WD4kZyaVc0cOMMcELXJA9ehxQ\nsIxjhX+5ks74mHwKyLm8KCoG7E63qEoJWqXvDRU2hpxhMrMc2HDena715nxsJLsu\nPa7WAZzRc9ny/6hVCE6L8Jt2N077hPu/opcmy/seXCDhmVLRc68K2yEhihm96uZ/\nCWZnx00ve0PBVG31sgku7K3mSFxzCC7Kz7XaKnNdo8OFyq1eJ9ae6o1Pp8S40+fo\nd+oGY2L94tLSOUPIBDipU8o3b6OfQW+uxqNiL/i6EVliwC65qtsQLQ8gj41ANYvC\nowIDAQAB\n-----END PUBLIC KEY-----\n
+
+# Token: sub=oidc_autocreated, iss=https://idp.example, far-future exp.
+--let $token= eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJvaWRjX2F1dG9jcmVhdGVkIiwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZSIsImV4cCI6OTk5OTk5OTk5OX0.Empi2YAY4-BF9KomDB0yWWCuR4gZnggOvlqVIvd-qIEQAemTOcWIx9tO21-Me3wWZjJpM6hFbNxPH-ZxMq4S3cDyZW4iayxkPtaOGAEHfJiuLQriXQllFZCtQU3NVbcFXPF4WNBukkFcQfILhVxwYHqrz1JGZK6k00axJKehn7pULasPkGmbWF2cVGHgrDA_BUC-lqb8zl1BwYtHWmRO5CdE60wuCdU9nylUIfAObA3SdficnFYqoxZQH6QDhYLAWM6fe3sVxXLAe8bLY99qnMVHcq_1UigSz0MzruOBvLMeahuhXbp4UlbbIL2Jeh6WHNilWDGmhcZ6hOQSTELL4g
+
+--echo #
+--echo # Install and configure the verification key + issuer. auto_create is OFF
+--echo # by default.
+--echo #
+INSTALL EXTENSION vsql_oauth2;
+
+--disable_query_log
+eval SET GLOBAL vsql_oauth2.public_key = '$pubkey';
+SET GLOBAL vsql_oauth2.issuer = 'https://idp.example';
+--enable_query_log
+
+--echo #
+--echo # Precondition: the token's account does not exist.
+--echo #
+SELECT COUNT(*) AS exists_before FROM mysql.user WHERE user = 'oidc_autocreated';
+
+--echo #
+--echo # (1) auto_create OFF: a valid token for an unknown account is denied --
+--echo # the server does not route an unknown account to the method -- and the
+--echo # account is NOT created.
+--echo #
+--echo # The login must FAIL; the exact client error is NOT asserted. With
+--echo # auto_create OFF the unknown account is routed to MySQL's anti-enumeration
+--echo # decoy path, which assigns a RANDOM built-in auth plugin (decoy_user in
+--echo # sql_authentication.cc). The client-visible error therefore varies between
+--echo # server processes -- e.g. 1045 "access denied" or 2000 "unknown error" --
+--echo # so asserting a specific one is inherently flaky. The durable assertion is
+--echo # that the account was NOT created.
+--echo #
+# Normalize the denial line (and drop the client password warning) so the
+# nondeterministic errno/text does not make the result flaky.
+--replace_regex /ERROR [0-9]+ \([A-Z0-9]+\): .*/ERROR: login denied/ /mysql: \[Warning\].*//
+--error 1
+--exec $MYSQL --enable_cleartext_plugin --user=oidc_autocreated --password=$token -e "SELECT 1" 2>&1
+--echo # Fail-closed proof: the account does not exist after the denied login.
+SELECT COUNT(*) AS created_while_off FROM mysql.user WHERE user = 'oidc_autocreated';
+
+--echo #
+--echo # (2) auto_create ON: the same login provisions the mapped account and the
+--echo # session runs AS it (no proxy). CURRENT_USER is the new account; the
+--echo # original identity is exposed via @@external_user.
+--echo #
+--disable_query_log
+SET GLOBAL vsql_oauth2.auto_create = ON;
+--enable_query_log
+--exec $MYSQL --enable_cleartext_plugin --user=oidc_autocreated --password=$token -e "SELECT CURRENT_USER(), @@external_user"
+
+--echo #
+--echo # The account now exists, bound to the vsql_oauth2 method.
+--echo #
+SELECT user, host, plugin FROM mysql.user WHERE user = 'oidc_autocreated';
+
+--echo #
+--echo # A second login for the now-existing account still succeeds (the
+--echo # account_unknown branch is skipped; it authenticates normally).
+--echo #
+--exec $MYSQL --enable_cleartext_plugin --user=oidc_autocreated --password=$token -e "SELECT CURRENT_USER()"
+
+--echo #
+--echo # Cleanup.
+--echo #
+--disable_query_log
+SET GLOBAL vsql_oauth2.auto_create = OFF;
+--enable_query_log
+UNINSTALL EXTENSION vsql_oauth2;
+DROP USER oidc_autocreated;
