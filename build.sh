@@ -25,12 +25,32 @@ if [[ -z "${SDK_DIR}" ]]; then
   echo "ERROR: No villagesql-extension-sdk-* found in ${VillageSQL_BUILD_DIR}" >&2
   exit 1
 fi
+# Strip any trailing slash so cache comparisons are stable.
+SDK_DIR="${SDK_DIR%/}"
+echo "[build] selected SDK: ${SDK_DIR}"
 
-# Pass SDK_DIR and VEB install dir directly (not VillageSQL_BUILD_DIR) so that
-# FindVillageSQL.cmake Method 2 runs, which uses our pre-selected SDK_DIR
-# instead of a glob that picks alphabetically-first (possibly older) SDK.
+# The SDK selection must win on EVERY build, not just the first configure.
+# cmake caches VillageSQL_SDK_DIR, and FindVillageSQL.cmake also has a glob-based
+# fallback (Method 1) keyed off VillageSQL_BUILD_DIR that can resolve a different
+# (possibly stale) SDK. To make the freshly-selected SDK authoritative without
+# any manual cache-clearing:
+#   - if the cached SDK differs from what we just selected, wipe the cache so the
+#     new selection can't be silently overridden by a frozen value;
+#   - do NOT pass VillageSQL_BUILD_DIR, so FindVillageSQL's glob fallback stays
+#     off and only our explicit SDK_DIR (Method 2) is used.
+CACHE_FILE="${BUILD_DIR}/CMakeCache.txt"
+if [[ -f "${CACHE_FILE}" ]]; then
+  CACHED_SDK="$(sed -n 's/^VillageSQL_SDK_DIR:[^=]*=//p' "${CACHE_FILE}" | head -1)"
+  CACHED_SDK="${CACHED_SDK%/}"
+  if [[ "${CACHED_SDK}" != "${SDK_DIR}" ]]; then
+    echo "[build] SDK changed (cached: '${CACHED_SDK:-none}') -- reconfiguring clean"
+    rm -f "${CACHE_FILE}"
+  fi
+fi
+
+# FORCE the cache value so a re-configure always adopts the current selection.
 cmake -S "${SCRIPT_DIR}" -B "${BUILD_DIR}" \
-  -DVillageSQL_SDK_DIR="${SDK_DIR}" \
+  -DVillageSQL_SDK_DIR:PATH="${SDK_DIR}" \
   -DVillageSQL_VEB_INSTALL_DIR="${VillageSQL_BUILD_DIR}/veb_output_directory"
 
 cmake --build "${BUILD_DIR}" -- -j"$(sysctl -n hw.logicalcpu 2>/dev/null || nproc)"

@@ -86,14 +86,57 @@ Example Usage
 
 set(_villagesql_found FALSE)
 
-# Method 1: Use VillageSQL_BUILD_DIR for development builds
+# Method 0 (highest priority): an explicitly provided VillageSQL_SDK_DIR wins.
+# build.sh selects the newest staged SDK by mtime and passes it here; that
+# choice must NOT be overridden by the glob-based build-dir search below, which
+# sorts alphabetically and can resolve a different (stale) SDK. Checking the
+# explicit dir first makes the caller's selection authoritative.
+if(VillageSQL_SDK_DIR AND NOT _villagesql_found)
+  if(EXISTS "${VillageSQL_SDK_DIR}/include/villagesql/extension.h")
+    set(VillageSQL_PREFIX "${VillageSQL_SDK_DIR}")
+    set(VillageSQL_INCLUDE_DIR "${VillageSQL_SDK_DIR}/include")
+    set(VillageSQL_CXX_FLAGS "-I${VillageSQL_SDK_DIR}/include")
+    if(EXISTS "${VillageSQL_SDK_DIR}/bin/villagesql_config")
+      set(VILLAGESQL_CONFIG_EXECUTABLE "${VillageSQL_SDK_DIR}/bin/villagesql_config")
+      execute_process(
+        COMMAND ${VILLAGESQL_CONFIG_EXECUTABLE} --version
+        OUTPUT_VARIABLE VillageSQL_VERSION
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+      )
+    endif()
+    if(NOT DEFINED VillageSQL_VEB_INSTALL_DIR AND VillageSQL_BUILD_DIR)
+      set(VillageSQL_VEB_INSTALL_DIR "${VillageSQL_BUILD_DIR}/veb_output_directory")
+    endif()
+    set(_villagesql_found TRUE)
+    message(STATUS "Using VillageSQL SDK from explicit VillageSQL_SDK_DIR: ${VillageSQL_SDK_DIR}")
+  endif()
+endif()
+
+# Method 1: Use VillageSQL_BUILD_DIR for development builds (fallback when no
+# explicit VillageSQL_SDK_DIR was given).
 if(VillageSQL_BUILD_DIR AND NOT _villagesql_found)
-  # Look for staged SDK in build directory
+  # Select the NEWEST staged SDK by modification time, matching build.sh. A
+  # plain list(SORT) is alphabetical, which can resolve a stale SDK when several
+  # versions/variants coexist (e.g. "...-0.0.6-dev" vs "...-mysql-8.4_0.0.6-dev");
+  # mtime tracks "most recently staged". Fall back to alphabetical only if the
+  # mtime probe is unavailable.
+  set(_sdk_dir "")
+  execute_process(
+    COMMAND bash -c "ls -dt '${VillageSQL_BUILD_DIR}'/villagesql-extension-sdk-*/ 2>/dev/null | head -1"
+    OUTPUT_VARIABLE _sdk_dir_mtime
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+  if(_sdk_dir_mtime AND EXISTS "${_sdk_dir_mtime}")
+    string(REGEX REPLACE "/$" "" _sdk_dir "${_sdk_dir_mtime}")
+  endif()
   file(GLOB _sdk_dirs "${VillageSQL_BUILD_DIR}/villagesql-extension-sdk-*")
-  if(_sdk_dirs)
+  if(NOT _sdk_dir AND _sdk_dirs)
     list(FILTER _sdk_dirs EXCLUDE REGEX "\\.tar\\.gz$")
     list(SORT _sdk_dirs ORDER DESCENDING)
     list(GET _sdk_dirs 0 _sdk_dir)
+  endif()
+  if(_sdk_dir OR _sdk_dirs)
     if(EXISTS "${_sdk_dir}/include/villagesql/extension.h")
       set(VillageSQL_PREFIX "${_sdk_dir}")
       set(VillageSQL_INCLUDE_DIR "${_sdk_dir}/include")
