@@ -12,8 +12,9 @@ signature and claims and maps it to a VillageSQL account.
 Preview. Requires a server built with the VEF auth capability, started with
 `--vsql_allow_preview_extensions=ON`.
 
-This version validates against a **static public key** (`RS256`/`ES256`).
-Fetching signing keys from a JWKS endpoint is not yet included.
+Tokens are validated (`RS256`/`ES256`) against either a static public key
+(`public_key`) or signing keys fetched from a JWKS endpoint (`jwks_url`, which
+takes precedence when set).
 
 ## How it works
 
@@ -34,6 +35,8 @@ configure time) over OpenSSL; no server-side JWT primitive is required.
   VEF auth capability.
 - CMake 3.16+, a C++17 compiler.
 - OpenSSL development headers (present wherever the server builds).
+- libcurl development headers — the JWKS fetch uses libcurl, and CMake fails the
+  configure step without them.
 - Network access at configure time (CMake `FetchContent` downloads jwt-cpp,
   pinned to a known-good commit).
 
@@ -168,7 +171,10 @@ level — use TLS to the server.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `vsql_oauth2.public_key` | `''` | PEM public key verifying the JWT signature. Empty rejects all tokens. |
+| `vsql_oauth2.public_key` | `''` | PEM public key verifying the JWT signature (RSA for `RS256`, EC for `ES256`). Used only when `jwks_url` is empty; empty with no `jwks_url` rejects all tokens. |
+| `vsql_oauth2.jwks_url` | `''` | JWKS endpoint to fetch signing keys from (the IdP's `.well-known` JWKS URI). Takes precedence over `public_key` when set. |
+| `vsql_oauth2.jwks_refresh_interval` | `3600` | How often, in seconds, to refresh cached JWKS keys (60–86400). |
+| `vsql_oauth2.jwks_http_timeout` | `5` | Timeout, in seconds, for a JWKS fetch (1–60). A slow endpoint fails the login closed rather than hanging. |
 | `vsql_oauth2.issuer` | `''` | Expected `iss` claim. Empty disables the check. |
 | `vsql_oauth2.audience` | `''` | Expected `aud` claim. Empty disables the check. |
 | `vsql_oauth2.username_claim` | `sub` | Claim holding the user identity. |
