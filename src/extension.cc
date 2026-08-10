@@ -72,8 +72,8 @@ char *g_roles_filter = nullptr;
 char *g_roles_transform_pattern = nullptr;
 char *g_roles_transform_replacement = nullptr;
 char *g_jwks_url = nullptr;
-int64_t g_jwks_refresh_interval = 3600;
-int64_t g_jwks_http_timeout = 5;
+long long g_jwks_refresh_interval = 3600;
+long long g_jwks_http_timeout = 5;
 bool g_auto_create = false;
 
 auto SYS_VARS = sv::make_capability({
