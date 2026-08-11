@@ -1,6 +1,7 @@
 call mtr.add_suppression("VEF auth: role .* is not granted; skipping");
 #
-# Setup. Roles pre-exist. auto_create ON.
+# Setup. Roles pre-exist. auto_grant ON (auto_create not needed -- bob is
+# DBA-created, never an unknown account).
 #
 INSTALL EXTENSION vsql_oauth2;
 CREATE ROLE `app-grp-dba`;

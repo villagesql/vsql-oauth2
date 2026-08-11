@@ -1,7 +1,7 @@
 call mtr.add_suppression("VEF auth: role .* is not granted; skipping");
 #
 # Setup: verification key + claim config. Roles PRE-EXIST (the DBA defines
-# them; the token only grants membership). auto_create ON.
+# them; the token only grants membership). auto_create + auto_grant ON.
 #
 INSTALL EXTENSION vsql_oauth2;
 CREATE ROLE `app-grp-dba`;

@@ -48,7 +48,7 @@ ERROR 2059 (HY000): Authentication plugin 'mysql_clear_password' cannot be loade
 #
 UNINSTALL EXTENSION vsql_oauth2;
 mysql: [Warning] Using a password on the command line interface can be insecure.
-ERROR 1524 (HY000): Plugin 'vsql_oauth2' is not loaded
+ERROR 3219 (HY000): authentication method 'vsql_oauth2' is not available (no such plugin or extension auth method)
 #
 # Cleanup.
 #

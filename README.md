@@ -185,6 +185,29 @@ level — use TLS to the server.
 | `vsql_oauth2.roles_filter` | `''` | Regex a `roles_claim` value must fully match to become a role (empty accepts all). E.g. `mysql-grp-.*`. |
 | `vsql_oauth2.roles_transform_pattern` | `''` | Regex rewritten (with the replacement) on each matched value. E.g. `-` to sanitize `mysql-grp-x`. Empty disables the transform. |
 | `vsql_oauth2.roles_transform_replacement` | `''` | Replacement for `roles_transform_pattern`. E.g. `_`. |
+| `vsql_oauth2.auto_create` | `OFF` | When `ON`, a valid-token login for an account that does not exist creates it (`CREATE USER ... IDENTIFIED WITH vsql_oauth2`), grants it the token's mapped roles, then runs as the new account. See [Auto-provisioning](#auto-provisioning). |
+| `vsql_oauth2.auto_grant` | `OFF` | When `ON`, the token's mapped roles that exist as DB roles are granted to an existing account on each login, so a claimed role the account was not granted takes effect. When `OFF`, roles are only activated if already granted. See [Auto-provisioning](#auto-provisioning). |
+
+## Auto-provisioning
+
+By default the DBA owns accounts and grants: an unknown account is rejected, and
+the token can only *activate* roles already granted (see [Roles](#roles)). Two
+system variables relax that, each queried live per login (a `SET GLOBAL` takes
+effect without reinstalling):
+
+- **`auto_create`** — a valid-token login for an account that does not exist
+  creates it (`CREATE USER ... IDENTIFIED WITH vsql_oauth2`), grants it the
+  token's mapped roles, and runs as the new account. Roles must already exist as
+  DB roles; an unknown role is skipped. Enabling this lets a holder of a valid
+  token tell an existing account from one that does not exist.
+- **`auto_grant`** — the token's mapped roles that exist as DB roles are granted
+  to an **existing** account on each login, so a role the token claims but the
+  account was not granted takes effect instead of being skipped. Independent of
+  `auto_create` (grant-to-existing vs create-unknown).
+
+Both hand role/account authority to the token issuer, so enable them only where
+the IdP and its claims are trusted to that degree. The server runs the DDL, not
+the extension.
 
 ## Roles
 
