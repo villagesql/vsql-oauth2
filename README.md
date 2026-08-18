@@ -3,6 +3,9 @@
 OAuth2/OIDC JWT authentication for VillageSQL, provided as an extension via the
 VillageSQL Extension Framework (VEF) `vsql::preview::auth` capability.
 
+**Docs:** [VillageSQL documentation](https://villagesql.com/docs) ·
+[Install VillageSQL Server](https://villagesql.com/install)
+
 An account created with `IDENTIFIED WITH vsql_oauth2` authenticates by presenting
 a JWT (bearer token) instead of a password. The extension validates the token's
 signature and claims and maps it to a VillageSQL account.
