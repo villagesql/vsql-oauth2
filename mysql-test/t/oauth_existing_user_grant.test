@@ -13,17 +13,18 @@
 #
 # auto_grant = ON gates the grant behavior (token authority); it is independent
 # of auto_create, which this test does not need (bob pre-exists). username_claim=
-# email, roles_claim=groups, roles_filter=app-grp-.*. Pre-signed RS256 token,
-# email=bob@myco.example, groups=[app-grp-dba].
+# email, roles_claim=groups, roles_filter=app-grp-.*. Pre-signed RS256 token
+# (from oauth_fixtures.inc), email=bob@myco.example, groups=[app-grp-dba].
 
 --source include/not_windows.inc
+--source oauth_fixtures.inc
 
 call mtr.add_suppression("VEF auth: role .* is not granted; skipping");
 
---let $pubkey= -----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA3ttOF8bHSN2oY7xpXCIg\nsTiXBr+q84xKvd76k3nBHUzMersfG8e/4ceybaGEK/s9iGAjUG1ruptN53JKbF4S\njaA8F7NMjN5KQK+eb3CvUHsV7kf5WMC4XMqgaaUQcOMqDC21z+Gog8ThHa8E8hz5\ndVLDQCpRF2tWWEtxutEAI5xv40Z+QWGeJyo1s3CikaDIJbc4ex19/UkxcFKKK2hZ\nJJ+Rl2rH8s5vctehRoMY4Pf+ow/ZL55LMM2aX6fdlLJc/bT4eeRrxC5dNKDn7kgs\npXG82v4w96l9SRBSPi1oVxGdT7BCZTgKyAGVgRwPTumfCvEm4oB0NqnQUvOai4Z1\nlwIDAQAB\n-----END PUBLIC KEY-----\n
+--let $pubkey= $existing_pubkey
 
 # email=bob@myco.example, groups=[app-grp-dba]  (never claims app-grp-legacy)
---let $t_dba= eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6ImJvYkBteWNvLmV4YW1wbGUiLCJpc3MiOiJodHRwczovL2lkcC5leGFtcGxlIiwiZXhwIjo5OTk5OTk5OTk5LCJncm91cHMiOlsiYXBwLWdycC1kYmEiXX0.uB4WdEMUpkahodP_NkHrt2xialXL2v2sbzZ2crtkvO3hYr4EUUUYxFKTKjXrchVxwVw0hCMFr5m8A22Q6Xihyc7XBLIe5ZAhS9rkCLbj1Jk9Z6AWaq_FZN7UkRW7talhnyWuKN8tza4-M_KL7kPjceBorKk26TZXwV0JcMIbHt8pE1SD6JdSG1HpMd4KZKZGGxylIiyo92m04HfWhpxUUiprYvaDpxjhzebIpui9qGwTo88Jmdc4BliaNGdKOlji8LJx050iEsDR6HYBEs-wsE4YDVdzdMz0WWhyrhWOcQCgfmP-HwDvm_oMZmSV3pPvSRIXKVAA_XznepP_t4mprQ
+--let $t_dba= $existing_dba
 
 --echo #
 --echo # Setup. Roles pre-exist. auto_grant ON (auto_create not needed -- bob is

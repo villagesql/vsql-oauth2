@@ -16,15 +16,14 @@
 #
 # Fixtures: a fixed RS256 keypair and a pre-signed token with
 # sub = oidc_autocreated (the account to be auto-created), iss =
-# https://idp.example, far-future exp. Real signature -> the extension verifies
-# it for real; precomputed -> no runtime crypto.
+# https://idp.example, far-future exp, from oauth_fixtures.inc. Real signature
+# -> the extension verifies it for real; precomputed -> no runtime crypto.
 
 --source include/not_windows.inc
+--source oauth_fixtures.inc
 
---let $pubkey= -----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA6nDMvcbBx8lMjSyovU7k\nPEEmpwlnup2IGZ86tg34C4nj76Od7Eh0lpho2C8WD4kZyaVc0cOMMcELXJA9ehxQ\nsIxjhX+5ks74mHwKyLm8KCoG7E63qEoJWqXvDRU2hpxhMrMc2HDena715nxsJLsu\nPa7WAZzRc9ny/6hVCE6L8Jt2N077hPu/opcmy/seXCDhmVLRc68K2yEhihm96uZ/\nCWZnx00ve0PBVG31sgku7K3mSFxzCC7Kz7XaKnNdo8OFyq1eJ9ae6o1Pp8S40+fo\nd+oGY2L94tLSOUPIBDipU8o3b6OfQW+uxqNiL/i6EVliwC65qtsQLQ8gj41ANYvC\nowIDAQAB\n-----END PUBLIC KEY-----\n
-
-# Token: sub=oidc_autocreated, iss=https://idp.example, far-future exp.
---let $token= eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJvaWRjX2F1dG9jcmVhdGVkIiwiaXNzIjoiaHR0cHM6Ly9pZHAuZXhhbXBsZSIsImV4cCI6OTk5OTk5OTk5OX0.Empi2YAY4-BF9KomDB0yWWCuR4gZnggOvlqVIvd-qIEQAemTOcWIx9tO21-Me3wWZjJpM6hFbNxPH-ZxMq4S3cDyZW4iayxkPtaOGAEHfJiuLQriXQllFZCtQU3NVbcFXPF4WNBukkFcQfILhVxwYHqrz1JGZK6k00axJKehn7pULasPkGmbWF2cVGHgrDA_BUC-lqb8zl1BwYtHWmRO5CdE60wuCdU9nylUIfAObA3SdficnFYqoxZQH6QDhYLAWM6fe3sVxXLAe8bLY99qnMVHcq_1UigSz0MzruOBvLMeahuhXbp4UlbbIL2Jeh6WHNilWDGmhcZ6hOQSTELL4g
+--let $pubkey= $autocreate_pubkey
+--let $token= $autocreate_valid
 
 --echo #
 --echo # Install and configure the verification key + issuer. auto_create is OFF

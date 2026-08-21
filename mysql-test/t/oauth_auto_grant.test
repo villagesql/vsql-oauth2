@@ -15,10 +15,12 @@
 # granted to it.
 #
 # Config: username_claim=email, roles_claim=groups, roles_filter=app-grp-.*.
-# Pre-signed RS256 tokens (fixed test keypair), email=alice@myco.example, three
-# group sets to exercise grant-on-create / add-on-login / retain-on-drop.
+# Pre-signed RS256 tokens (fixed test keypair, from oauth_fixtures.inc),
+# email=alice@myco.example, three group sets to exercise grant-on-create /
+# add-on-login / retain-on-drop.
 
 --source include/not_windows.inc
+--source oauth_fixtures.inc
 
 # The server logs a warning when the token claims a role that is not granted to
 # the account and the extension can only ACTIVATE (not grant) it. That warning
@@ -28,16 +30,16 @@
 # role_edges membership behavior, not on this log line.
 call mtr.add_suppression("VEF auth: role .* is not granted; skipping");
 
---let $pubkey= -----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmB06JnqEgmlMlvy26g4D\ngZmOAk0/jPX+I4t+0moxAOrghC1OZ1XfIkFzx2OGjNFN+rcmHMm+WyBoVth6v7hO\n1Woe3YktF+CNsVgsYkbNaVqdy9ZKpH4tqiT73mLXzmghlBA3RZDRq/npdzHcnINb\nGeuBZ+948y+Bv6Tb5QNsYuMSjdEMT/a7uQ9Ffz/HWaVUz5wiMCEi84S62SbJVe5X\nr/jZ4CB7ujEAQBQLN3lcG6HzB3KTEsmNvKSath/r3nmnVsJsrNTwcbaurExHuqkL\nkFxnj4Fq+9UaAyd3ntVST3MvdhmqlmPTF0OPQNSv1S72ZJIJLlJ+x86Teb4tGQoa\nNQIDAQAB\n-----END PUBLIC KEY-----\n
+--let $pubkey= $autogrant_pubkey
 
 # email=alice@myco.example, groups=[app-grp-dba]
---let $t_dba= eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6ImFsaWNlQG15Y28uZXhhbXBsZSIsImlzcyI6Imh0dHBzOi8vaWRwLmV4YW1wbGUiLCJleHAiOjk5OTk5OTk5OTksImdyb3VwcyI6WyJhcHAtZ3JwLWRiYSJdfQ.Wstj8Ty32JFjMvUaeqbVAy7Gp60fDEdmm4dNdif0ECFOzKrPT3tF-ZwAeDUQFDEzduJIqJL_QFGQUdQayEPRxtunNzgIAUASgayQd5Idtq9Yfk0ojLN4ygzitNFbmHEUcJlJqQJth2HCoUAMiPp31A4AMR4zLTleSO-jcBt_T5mGTd3qtIvshWilS-oTp3nxSCfagYf1FAd1Scvt9UPfwU33mB-sdvGxNu0Pphb6DK5KDSbIKINnyWYYJFvoYQGHpn0l0ZUx6SACmRY1DmqNMwdbvWADMTyxw2gVRv5Lk_8C9J-p-eL9lWFuEe0o6z8TJl9hEyjdYCwNJcjMxVL0MA
+--let $t_dba= $autogrant_dba
 
 # groups=[app-grp-dba, app-grp-analyst]
---let $t_dba_ana= eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6ImFsaWNlQG15Y28uZXhhbXBsZSIsImlzcyI6Imh0dHBzOi8vaWRwLmV4YW1wbGUiLCJleHAiOjk5OTk5OTk5OTksImdyb3VwcyI6WyJhcHAtZ3JwLWRiYSIsImFwcC1ncnAtYW5hbHlzdCJdfQ.TIwp-Jqk4BIiV4hA_vHEWo0cu7dS7VOFo8IBITxDab_KVSlCpXOm7u7jmw0RdTSrolxuuezBW_SOEuB6z5ssr0I26scIztXICnjAAn-bWT3DI8cTnm5VtJXpLXo-yWjui4KS4ND4sYOiciN62I6QQet4RyXHhBAICu-WbMSXhHNOzyy4Gv8DPMRBReL7o2RBmXIMSZ8oKNYdOkQ9NIydHzZKaqFaII8HYEbGp9_ulOsWOeOSTDOCI7pwkWdqtyjNl8oux84LtbeyxZVvhNM-e0k0pC_hg5B04_0YeUIOwGa4R8q4BefXGH1wUORmWIB4q8Sfs9hcrXQWaK1OV4a_hA
+--let $t_dba_ana= $autogrant_dba_ana
 
 # groups=[app-grp-analyst]  (dba dropped -> RETAINED, no revoke)
---let $t_ana= eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJlbWFpbCI6ImFsaWNlQG15Y28uZXhhbXBsZSIsImlzcyI6Imh0dHBzOi8vaWRwLmV4YW1wbGUiLCJleHAiOjk5OTk5OTk5OTksImdyb3VwcyI6WyJhcHAtZ3JwLWFuYWx5c3QiXX0.V5eN6823QS74KW60Lgpyx88o-snLylQolu3Z_cb3ZFyiSaizATH27N0-atxvmwMHE8UrrwN63dRBpqV9-DDN1WYapo8B_KyBN6KPi3qzSWtFRXvEQufu31jvO9JNjFxi0sUU50PHWO9tXUfg-N9J0r-2_kFss-SXpfWt5dBJGzQWRGtAyyhSJcMUqABwoV7Lddk3WSQ3r6iS0_vnXma0gc2d598Uir0WqIwbKwvDj0XF37jHut64oiddjqS3NZbOEa_rXfQmsSAc1CgE2TK-P0Mymbb9F5Dnpx24swB0YuaeJWCvRf-rfHwU8qDqca2Nw-v392sBShyJOGKScSquJw
+--let $t_ana= $autogrant_ana
 
 --echo #
 --echo # Setup: verification key + claim config. Roles PRE-EXIST (the DBA defines
