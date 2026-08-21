@@ -10,11 +10,12 @@
 # the clear-password-style framing the server accepts under this method's pinned
 # client-plugin name. mtr connects over the unix socket.
 #
-# Fixtures (the SAME fixed RS256 keypair + pre-signed token as oauth_basic.test)
-# keep the test deterministic with no runtime crypto. sub=oauth_mapped_user,
-# iss=https://idp.example, far-future exp.
+# Fixtures (the SAME fixed RS256 keypair + pre-signed token as oauth_basic.test,
+# from oauth_fixtures.inc) keep the test deterministic with no runtime crypto.
+# sub=oauth_mapped_user, iss=https://idp.example, far-future exp.
 
 --source include/not_windows.inc
+--source oauth_fixtures.inc
 
 # vsql_oauth_client is a client-side plugin built only with
 # -DWITH_AUTHENTICATION_CLIENT_PLUGINS=ON. mtr registers it in
@@ -28,11 +29,8 @@ if (!$VSQL_OAUTH_CLIENT_OPT)
   --skip vsql_oauth_client not built (needs -DWITH_AUTHENTICATION_CLIENT_PLUGINS=ON)
 }
 
-# Fixed test public key (matches the private key that signed the token below).
---let $pubkey= -----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzN6+QxBZ9p6bUI9Lod/5\nIYtXA3gQ4E+LmtX9jTHSk0EGuaiLYmxNCTifTpqfYJkwjctE8keMDhouCP2CraK0\nkmULDkuF8dbVaK6MXHFjew0yu3K8MCtWbDWTgazszYKvEH3+wDZ1dU7W595KpQSb\nPKiV46LGXIXkAHUtYTJzNmr3ObEbgQFARbAqQa9RLaJwUgSOYOW0qf8TWrRol84B\nZvFle32tJ/xUv9V4ae1ccK4Pbzn0FRymbW1T7JLt7hp/xX2qzQ/KI/1JHoCQkFoz\nfvEt0TGQN1qOo2lrqQjDamQW+W67B9hS5h8Ul/A1TH2p4Xz0wJYrenH8AHaXqyqD\n7wIDAQAB\n-----END PUBLIC KEY-----\n
-
-# Pre-signed token (RS256). sub=oauth_mapped_user, iss=https://idp.example.
---let $valid_token= eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJvYXV0aF9tYXBwZWRfdXNlciIsImlzcyI6Imh0dHBzOi8vaWRwLmV4YW1wbGUiLCJleHAiOjk5OTk5OTk5OTl9.jzmGoHnGE7rqoKcHJIlKOiMlBJ-GgPQf8ayCqymCC7BCpujCa8AfklKg48TZQnvejpUrW4yUEtQu0hDTTTMH-ZJC5uWOLyUJ4gXXDBjO2k3skOPmDkDP2nFAbUuxLdDaI_qxwMkj4ze-kYaL1FHn_Q1nTVtUdJg-B37ZvINycvkIHlCREMaloOfCT1hY77dUCiYPobExfLCtY9MC6hMwex2uXaHNvMD0ShW16xW6DVGU3dl84avfA8ODJs2qfD6Bry3QAcvfRsqkyc6TohsljTFVH-TTOgFk2D-0KETK0VGxwDWbnHA-EvbhdAoNucu3RZ-fH0sGJ9KLZRWgPP_-sg
+--let $pubkey= $basic_pubkey
+--let $valid_token= $basic_valid
 
 # Write the token to a file for the plugin to read (VSQL_OAUTH_TOKEN_FILE mode).
 # --exec so mtr expands $valid_token; printf (no trailing newline) keeps it bare.
