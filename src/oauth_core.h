@@ -122,6 +122,16 @@ Decision evaluate(const std::string &token, const Config &config);
 std::string_view token_from_packet(const unsigned char *pkt, int64_t pkt_len,
                                    std::string_view client_plugin);
 
+// Whether this extension can consume a credential delivered by the client-side
+// auth plugin named `client_plugin` -- i.e. token_from_packet knows how to
+// extract the JWT from its framing. Backs the auth method's
+// accepts_client_plugin callback: the server accepts an offer this returns true
+// for as-is, and tells the client to switch to the advertised default plugin
+// otherwise. This is the accept-set; it must stay in lockstep with
+// token_from_packet's framing dispatch (accepting a plugin we cannot parse
+// would hand the handler undecodable bytes). Pure function.
+bool accepts_client_plugin(std::string_view client_plugin);
+
 } // namespace vsql_oauth2
 
 #endif // VSQL_OAUTH2_OAUTH_CORE_H

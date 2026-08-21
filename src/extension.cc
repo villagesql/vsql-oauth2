@@ -26,21 +26,16 @@
 // compiled directly into this extension -- an auth-extension author does not
 // need any server-side JWT primitive.
 //
-// Pairs with the built-in mysql_clear_password client plugin so the token
-// arrives verbatim in the password slot (client must use
-// --enable-cleartext-plugin).
+// By default the server advertises the built-in mysql_clear_password client
+// plugin for this method, so a standard client sends the JWT verbatim in the
+// password slot (the client must opt in with --enable-cleartext-plugin, which
+// lets that plugin send a cleartext secret; use TLS to the server).
 //
-// Usage:
-//   INSTALL EXTENSION vsql_oauth2;
-//   SET GLOBAL vsql_oauth2.jwks_url = 'https://idp.example/.well-known/jwks';
-//   SET GLOBAL vsql_oauth2.issuer = 'https://idp.example';
-//   CREATE USER u IDENTIFIED WITH vsql_oauth2;
-//
-// Optional auto-create: with SET GLOBAL vsql_oauth2.auto_create = ON, a login
-// for an account that does not yet exist but presents a valid token is
-// provisioned on the fly (CREATE USER ... IDENTIFIED WITH vsql_oauth2) with the
-// token's mapped roles granted, then runs as the new account. Roles must
-// already exist as DB roles (the DBA owns roles); an unknown role is skipped.
+// This file wires the extension into the SDK: the vsql_oauth2.* system
+// variables (each documented on its sv::make_* entry below), the authenticate
+// handler, and the AuthCapability that registers the method. The README is the
+// operator-facing reference for configuration, roles, and login; oauth_core
+// holds the wrapper-agnostic token validation and claim->account mapping.
 
 #include <cstdint>
 #include <cstring>
@@ -75,6 +70,7 @@ char *g_jwks_url = nullptr;
 long long g_jwks_refresh_interval = 3600;
 long long g_jwks_http_timeout = 5;
 bool g_auto_create = false;
+bool g_auto_grant = false;
 
 auto SYS_VARS = sv::make_capability({
     sv::make_str("issuer",
@@ -127,12 +123,24 @@ auto SYS_VARS = sv::make_capability({
     sv::make_bool(
         "auto_create",
         "When ON, a login for an account that does not exist but presents a "
-        "valid token is provisioned on the fly (CREATE USER ... IDENTIFIED "
-        "WITH vsql_oauth2) and the mapped roles granted, then the session runs "
-        "as the new account. When OFF (default), unknown accounts are rejected "
-        "as usual. Enabling this relaxes anti-enumeration (a valid-token holder "
-        "can tell an existing account from a non-existent one).",
+        "valid token creates the account (CREATE USER ... IDENTIFIED WITH "
+        "vsql_oauth2), then the session runs as the new account. When OFF "
+        "(default), accounts that do not exist are rejected as usual. Enabling "
+        "this lets a holder of a valid token tell an existing account from one "
+        "that does not exist.",
         &g_auto_create, false),
+    sv::make_bool(
+        "auto_grant",
+        "When ON, the DB roles mapped from the token's roles_claim (after "
+        "roles_filter/roles_transform) that exist as DB roles are GRANTED to "
+        "the resolved account on each login, so a claimed role the account was "
+        "not granted takes effect. When OFF (default), roles are only "
+        "ACTIVATED "
+        "grant-checked -- a claimed role not already granted is skipped, so "
+        "the "
+        "token cannot escalate (the DBA owns grants). Independent of "
+        "auto_create.",
+        &g_auto_grant, false),
 });
 
 // Process-wide JWKS key cache, shared by all connections.
@@ -170,8 +178,7 @@ vsql_oauth2::KeyResolver build_key_resolver() {
 
 // Assemble the per-attempt config from current sysvar values plus the account's
 // AS '...' clause.
-vsql_oauth2::Config build_config(const vef_auth_ops_t *ops,
-                                 vef_auth_ctx_t *ctx) {
+vsql_oauth2::Config build_config(vsql::preview_auth::AuthContext &c) {
   vsql_oauth2::Config config;
   if (g_issuer != nullptr)
     config.issuer = g_issuer;
@@ -188,115 +195,136 @@ vsql_oauth2::Config build_config(const vef_auth_ops_t *ops,
     config.roles_transform_pattern = g_roles_transform_pattern;
   if (g_roles_transform_replacement != nullptr)
     config.roles_transform_replacement = g_roles_transform_replacement;
-  const char *as = ops->auth_string(ctx);
+  const char *as = c.auth_string();
   if (as != nullptr)
     config.auth_string = as;
   return config;
 }
 
-// Opt-in for handling UNKNOWN accounts, queried LIVE by the server per
-// unknown-account login (so SET GLOBAL vsql_oauth2.auto_create takes effect
-// without reinstalling). Non-zero routes unknown-account logins to this method
-// for token validation + on-the-fly provisioning; zero preserves the standard
-// "unknown account -> access denied".
-int auto_create_enabled() { return g_auto_create ? 1 : 0; }
+// Opt-in for handling logins to accounts that do not exist, queried live by the
+// server per such login (so SET GLOBAL vsql_oauth2.auto_create takes effect
+// without reinstalling). True routes these logins to this method so it can
+// validate the token and create the account; false preserves the standard
+// "account does not exist -> access denied".
+bool auto_create_enabled() { return g_auto_create; }
+
+// Opt-in for granting the token's mapped roles to the resolved account, queried
+// live per login (so SET GLOBAL vsql_oauth2.auto_grant takes effect without
+// reinstalling). True has the server grant those roles; false keeps the default
+// where a claimed role that was not already granted is skipped. Independent of
+// auto_create.
+bool auto_grant_enabled() { return g_auto_grant; }
 
 // The authenticator. Reads the JWT the client sent, hands it to
 // oauth_core::evaluate() for validation + claim->account mapping, and maps the
 // Decision to the auth context. Fail closed: only an explicit accept returns
-// VEF_AUTH_OK.
-vef_auth_result_t authenticate(vef_auth_ctx_t *ctx, const vef_auth_ops_t *ops) {
-  // Read the token. A non-positive length means the client disconnected or sent
-  // a malformed packet -- fail closed.
-  const unsigned char *pkt = nullptr;
-  const int64_t pkt_len = ops->read_packet(ctx, &pkt);
-  if (pkt_len <= 0 || pkt == nullptr)
-    return VEF_AUTH_ERROR;
+// AuthResult::kOk.
+vsql::preview_auth::AuthResult
+authenticate(vsql::preview_auth::AuthContext &c) {
+  using vsql::preview_auth::AuthResult;
+
+  // Read the token. An empty span means the client disconnected or sent a
+  // malformed packet -- fail closed.
+  const auto pkt = c.read_packet();
+  if (pkt.empty())
+    return AuthResult::kError;
 
   // Extract the JWT from the raw handshake packet. The framing depends on which
-  // client plugin the connection negotiated, so pass that name (not a byte sniff)
-  // to token_from_packet.
+  // client plugin the connection negotiated, so pass that name (not a byte
+  // sniff) to token_from_packet.
   const std::string token(vsql_oauth2::token_from_packet(
-      pkt, pkt_len, ops->client_auth_plugin(ctx)));
+      pkt.data(), static_cast<int64_t>(pkt.size()), c.client_auth_plugin()));
 
   const vsql_oauth2::Decision decision =
-      vsql_oauth2::evaluate(token, build_config(ops, ctx));
+      vsql_oauth2::evaluate(token, build_config(c));
 
   // Fail closed: only an explicit accept authenticates. reject_reason is for
   // the server error log only and is never surfaced to the client.
   if (!decision.accept)
-    return VEF_AUTH_REJECT;
+    return AuthResult::kReject;
 
   // A Decision marked accept must name an account; guard against a malformed
   // accept rather than authenticating as an empty user.
   if (decision.account.empty())
-    return VEF_AUTH_ERROR;
+    return AuthResult::kError;
 
   // Auto-create: when this login was routed here for an account that does not
-  // exist (the unknown-account opt-in above), ask the server to provision the
+  // exist (the unknown-account opt-in above), ask the server to create the
   // mapped account -- CREATE USER ... IDENTIFIED WITH vsql_oauth2, granting the
-  // token's mapped roles -- so the session then runs AS the new account (no
-  // proxy). The server owns the DDL; the token has already been validated
-  // above. Provision the DECISION's account (the token's mapped identity), not
-  // the raw handshake username, so it matches what we authenticate as. On
-  // failure fail closed. A pre-existing account skips this and authenticates
-  // normally.
-  if (ops->account_unknown(ctx)) {
+  // token's mapped roles -- so the session then runs as the new account
+  // directly. The server runs the DDL; the token has already been validated
+  // above. Create the DECISION's account (the token's mapped identity), not
+  // the raw handshake username, so it matches what we authenticate as. The
+  // server defers the DDL until this handler returns kOk and fails the login if
+  // it can't create the account, so there is nothing to check here. An account
+  // that already exists skips this and authenticates normally.
+  if (c.account_unknown()) {
     std::vector<const char *> role_ptrs;
     role_ptrs.reserve(decision.roles.size());
     for (const std::string &r : decision.roles)
       role_ptrs.push_back(r.c_str());
-    if (ops->request_provision(ctx, decision.account.c_str(), role_ptrs.data(),
-                               static_cast<uint64_t>(role_ptrs.size())) != 0)
-      return VEF_AUTH_ERROR;
+    c.request_provision(decision.account.c_str(), role_ptrs.data(),
+                        static_cast<uint32_t>(role_ptrs.size()));
   }
 
   // authenticated_as is the account used for authorization (CURRENT_USER);
   // external_user is the original identity for the audit trail
   // (@@external_user).
-  ops->set_authenticated_as(ctx, decision.account.c_str());
-  ops->set_external_user(ctx, decision.external_identity.c_str());
+  c.authenticate_as(decision.account.c_str());
+  c.set_external_user(decision.external_identity.c_str());
 
   // Activate the roles mapped from the token's roles_claim (filter +
   // transform). The server activates only those already granted to the account
-  // -- an ungranted name is skipped, so the token cannot escalate. When the
-  // token carried no roles this stages an empty set (no roles active), matching
-  // the account's non-default-role state. Skip the call entirely when role
-  // mapping is not configured (roles empty) so default-role behavior is
-  // unchanged.
+  // -- a role that is not granted is skipped, so the token cannot escalate.
+  // Skip the call entirely when role mapping is not configured (roles empty),
+  // so the account's default roles apply unchanged.
   if (!decision.roles.empty()) {
     std::vector<const char *> role_ptrs;
     role_ptrs.reserve(decision.roles.size());
     for (const std::string &r : decision.roles)
       role_ptrs.push_back(r.c_str());
-    ops->set_active_roles(ctx, role_ptrs.data(),
-                          static_cast<uint64_t>(role_ptrs.size()));
+    c.set_active_roles(role_ptrs.data(),
+                       static_cast<uint32_t>(role_ptrs.size()));
   }
-  return VEF_AUTH_OK;
+  return AuthResult::kOk;
 }
 
-// The client-side auth plugin the handshake ADVERTISES as the default for this
-// method. Pin the built-in "mysql_clear_password": it is present in every
-// client/driver, so a naive client (one that does not pass --default-auth) is
-// steered to a plugin it already has and the universal token-in-password-slot
-// path (mysql -p"$(token-helper)", JDBC, Grafana, service principals) works with no
-// extra artifact.
+// The client-side auth plugin the server advertises as the default for this
+// method. We use the built-in "mysql_clear_password": it ships with every
+// client and driver, so a client that does not name a plugin of its own is
+// steered to one it already has, and the token is sent verbatim in the
+// password slot (mysql -p"$(token-helper)", JDBC, Grafana, service accounts)
+// with no extra client-side software.
 //
-// This is only the DEFAULT for naive clients. A client that explicitly selects
-// another plugin still works: the server accepts a VEF method's token under any
-// non-scrambler client-plugin name (see vsql_vef_reply_is_verbatim in the
-// server). In particular MySQL's native authentication_openid_connect_client
-// works with --default-auth=authentication_openid_connect_client + a token file
-// (the handler decodes its lenenc framing). Verified 2026-07-11.
+// This is only the default. A client that explicitly selects another plugin
+// still connects if this method accepts that plugin: the server asks
+// accepts_client_plugin() below whether to take the client's offer as-is,
+// otherwise it tells the client to switch to the advertised default. In
+// particular MySQL's own authentication_openid_connect_client works with
+// --default-auth=authentication_openid_connect_client and a token file (the
+// handler decodes its length-encoded framing).
 //
-// TODO(villagesql): make this pin operator-configurable (a sysvar), so a
+// TODO(villagesql): make .client_plugin() operator-configurable, so a
 // deployment that ships the OIDC client plugin can make IT the zero-config
-// default. See Docs/DESIGN_CLIENT_TOKEN_ACQUISITION.md and
-// Docs/DESIGN_AUTH_METHOD_ENABLED_LIFECYCLE.md.
+// default.
+
+// Which client plugins this method accepts as-is (without asking the client to
+// switch to the advertised default). The server asks this during handshake
+// negotiation; we accept exactly the plugins token_from_packet can decode. For
+// any other offer the server tells the client to switch to the default, so a
+// client that named an unsupported plugin still connects. `offered` is the raw
+// client-supplied name; delegate to the core accept-set so it stays in lockstep
+// with the framing dispatch.
+bool accepts_client_plugin(const char *offered) {
+  return offered != nullptr && vsql_oauth2::accepts_client_plugin(offered);
+}
+
 constexpr auto AUTH_METHOD =
     vsql::preview_auth::make_auth<&authenticate>("vsql_oauth2")
-        .pin("mysql_clear_password")
+        .client_plugin("mysql_clear_password")
         .auto_create(&auto_create_enabled)
+        .auto_grant(&auto_grant_enabled)
+        .accepts_client_plugin(&accepts_client_plugin)
         .build();
 // AuthCapability is non-copyable (it self-registers at a fixed address), so
 // construct it in place from the built descriptor.

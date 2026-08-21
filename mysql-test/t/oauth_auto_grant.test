@@ -1,23 +1,18 @@
 # oauth_auto_grant -- token-driven role membership (auto-GRANT) for vsql_oauth2.
 #
-# ============================================================================
-# TDD SPEC -- this test defines behavior that is NOT YET IMPLEMENTED. It is
-# EXPECTED TO FAIL on current code (today the extension only ACTIVATES roles
-# already granted; it does not grant). It is the definition of done for the
-# auto-grant feature. Do NOT --record it green until the feature lands.
-# ============================================================================
-#
-# Principle (ADDITIVE grant, gated by auto_create; NO revoke in this cut):
-# when auto_create = ON, on EVERY login the claimed roles (after
+# Principle (ADDITIVE grant, gated by auto_grant; NO revoke in this cut):
+# when auto_grant = ON, on EVERY login the claimed roles (after
 # roles_filter/roles_transform) that exist as DB roles are GRANTED to the
 # account -- for existing accounts too, not just at create -- and then
 # activated. Grant is additive: a role no longer claimed is RETAINED (revoke /
 # authoritative reconcile + stale-user/grant cleanup are a separate deferred
 # task). The token does NOT define role permissions -- roles must PRE-EXIST as
 # DBA-defined DB roles; a claimed role that does not exist is skipped (the token
-# carries a group name, not what the role may do). Gating on the existing
-# auto_create sysvar: ON = token is authoritative (create + grant); OFF = DBA
-# owns accounts and grants, token only activates already-granted roles.
+# carries a group name, not what the role may do). auto_grant is independent of
+# auto_create: ON = token grants membership; OFF = token only activates
+# already-granted roles (the DBA owns grants). This test enables both -- auto_create
+# so the unknown account is provisioned, auto_grant so the claimed roles are
+# granted to it.
 #
 # Config: username_claim=email, roles_claim=groups, roles_filter=app-grp-.*.
 # Pre-signed RS256 tokens (fixed test keypair), email=alice@myco.example, three
@@ -46,7 +41,7 @@ call mtr.add_suppression("VEF auth: role .* is not granted; skipping");
 
 --echo #
 --echo # Setup: verification key + claim config. Roles PRE-EXIST (the DBA defines
---echo # them; the token only grants membership). auto_create ON.
+--echo # them; the token only grants membership). auto_create + auto_grant ON.
 --echo #
 INSTALL EXTENSION vsql_oauth2;
 --disable_query_log
@@ -56,6 +51,7 @@ SET GLOBAL vsql_oauth2.username_claim = 'email';
 SET GLOBAL vsql_oauth2.roles_claim = 'groups';
 SET GLOBAL vsql_oauth2.roles_filter = 'app-grp-.*';
 SET GLOBAL vsql_oauth2.auto_create = ON;
+SET GLOBAL vsql_oauth2.auto_grant = ON;
 --enable_query_log
 
 CREATE ROLE `app-grp-dba`;
@@ -102,6 +98,7 @@ SELECT FROM_USER, TO_USER FROM mysql.role_edges WHERE TO_USER = 'alice@myco.exam
 --echo #
 --disable_query_log
 SET GLOBAL vsql_oauth2.auto_create = OFF;
+SET GLOBAL vsql_oauth2.auto_grant = OFF;
 SET GLOBAL vsql_oauth2.username_claim = 'sub';
 SET GLOBAL vsql_oauth2.roles_claim = '';
 SET GLOBAL vsql_oauth2.roles_filter = '';

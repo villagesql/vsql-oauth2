@@ -202,6 +202,13 @@ size_t read_lenenc(const unsigned char *p, size_t avail, uint64_t *out) {
   return 1 + static_cast<size_t>(extra);
 }
 
+// The two client plugins whose framing token_from_packet decodes.
+// kClearPassword delivers the token unmodified (also the default the server
+// tells a client to switch to when its offer is not accepted); kOidcClient
+// wraps it in the capability + length-encoded framing.
+constexpr std::string_view kClearPassword = "mysql_clear_password";
+constexpr std::string_view kOidcClient = "authentication_openid_connect_client";
+
 }  // namespace
 
 std::string_view token_from_packet(const unsigned char *pkt, int64_t pkt_len,
@@ -213,7 +220,7 @@ std::string_view token_from_packet(const unsigned char *pkt, int64_t pkt_len,
   // sniffing packet bytes: the OIDC client's leading byte is a capability
   // bitmask (not a format tag), so byte-sniffing would be fragile as
   // capabilities evolve. The plugin name is authoritative.
-  if (client_plugin == "authentication_openid_connect_client") {
+  if (client_plugin == kOidcClient) {
     // The stock MySQL 9.1+ client plugin (Community; ships with the client, not
     // this repo). We support it so a stock 9.1+ client can authenticate against
     // this server with no custom artifact. Its framing (confirmed by decoding a
@@ -230,11 +237,26 @@ std::string_view token_from_packet(const unsigned char *pkt, int64_t pkt_len,
             static_cast<size_t>(n)};
   }
 
-  // Default (mysql_clear_password and any other verbatim-credential plugin): the
-  // whole packet, minus a trailing NUL if present.
+  // Default (mysql_clear_password and any other plugin that sends the token
+  // unmodified): the whole packet, minus a trailing NUL if present.
   size_t token_len = len;
   if (pkt[token_len - 1] == '\0') --token_len;
   return {reinterpret_cast<const char *>(pkt), token_len};
+}
+
+bool accepts_client_plugin(std::string_view client_plugin) {
+  // Exactly the plugins token_from_packet decodes: mysql_clear_password (token
+  // sent unmodified) and the OIDC client's capability + length-encoded framing.
+  // For any other offer the server tells the client to switch to the advertised
+  // default. The OIDC branch also covers Percona's
+  // authentication_openid_connect_client, which is byte-compatible (same name,
+  // same framing) -- no separate case.
+  //
+  // TODO(villagesql): consider making the accepted set operator-configurable (a
+  // sysvar), so a deployment can widen or restrict which client plugins are
+  // accepted as-is. Any added name needs a matching decode branch in
+  // token_from_packet -- the two must stay in lockstep.
+  return client_plugin == kClearPassword || client_plugin == kOidcClient;
 }
 
 } // namespace vsql_oauth2
