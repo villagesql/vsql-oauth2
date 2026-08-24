@@ -22,6 +22,16 @@
 --source include/not_windows.inc
 --source oauth_fixtures.inc
 
+# In case (1) below (auto_create OFF + unknown account), the server routes the
+# login to its anti-enumeration decoy path, which assigns a RANDOM built-in auth
+# plugin to the phantom account. When that plugin is one of the SHA-2 password
+# plugins, it logs MY-011248 ("Authentication requires either RSA keys or SSL
+# encryption") because the test connects without TLS and no RSA keys are set up.
+# The line is an expected artifact of the decoy path (not the vsql_oauth2
+# method), and which plugin gets picked is nondeterministic across platforms, so
+# suppress it -- the durable assertion is that the account was NOT created.
+call mtr.add_suppression("Authentication requires either RSA keys or SSL encryption");
+
 --let $pubkey= $autocreate_pubkey
 --let $token= $autocreate_valid
 
