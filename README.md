@@ -15,7 +15,7 @@ signature and claims and maps it to a VillageSQL account.
 Preview. Requires a server built with the VEF auth capability, started with
 `--vsql_allow_preview_extensions=ON`.
 
-Tokens are validated (`RS256`/`ES256`) against either a static public key
+Tokens are validated (RSA `RS256`/`RS384`/`RS512` or ECDSA `ES256`/`ES384`/`ES512`) against either a static public key
 (`public_key`) or signing keys fetched from a JWKS endpoint (`jwks_url`, which
 takes precedence when set).
 
