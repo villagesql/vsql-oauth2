@@ -51,16 +51,20 @@ endif()
 # jwt-cpp's own OpenSSL discovery/targets -- we link OpenSSL ourselves above and
 # only need the headers.
 include(FetchContent)
-set(JWT_DISABLE_PICOJSON OFF CACHE INTERNAL "")
-set(JWT_BUILD_EXAMPLES OFF CACHE INTERNAL "")
-set(JWT_EXTERNAL_PICOJSON OFF CACHE INTERNAL "")
 FetchContent_Declare(
   jwt-cpp
   GIT_REPOSITORY https://github.com/Thalhammer/jwt-cpp.git
   GIT_TAG        0a503e75084cfdb48cc2186e6b961444eb819007  # pinned known-good
   GIT_SHALLOW    FALSE
 )
-FetchContent_MakeAvailable(jwt-cpp)
+# Populate only -- never add jwt-cpp as a subproject. The build consumes just
+# ${jwt-cpp_SOURCE_DIR}/include (target_include_directories below), and
+# jwt-cpp's CMakeLists carries unconditional install() rules that would run on
+# `make install` and write headers/cmake files into the system install prefix.
+FetchContent_GetProperties(jwt-cpp)
+if(NOT jwt-cpp_POPULATED)
+  FetchContent_Populate(jwt-cpp)
+endif()
 
 message(STATUS "VillageSQL SDK found at: ${VillageSQL_PREFIX}")
 message(STATUS "VillageSQL include dir: ${VillageSQL_INCLUDE_DIR}")
