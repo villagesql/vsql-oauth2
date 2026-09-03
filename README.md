@@ -24,8 +24,8 @@ takes precedence when set).
 This walks two setups end to end: first a token login for an account you create
 ahead of time, then role mapping with auto-provisioning, where a person's first
 login creates their account and grants their roles. The example values are for
-Microsoft Entra ID; [Docs/MANUAL_TEST_ENTRA.md](Docs/MANUAL_TEST_ENTRA.md)
-covers the app registrations Entra needs.
+Microsoft Entra ID; [Provider settings](#provider-settings) gives the values
+for other providers and names the app registrations Entra needs.
 
 Prerequisites: a server started with `--vsql_allow_preview_extensions=ON` (on a
 running server, `SET PERSIST vsql_allow_preview_extensions = ON` takes effect at
