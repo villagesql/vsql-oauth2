@@ -19,6 +19,109 @@ Tokens are validated (RSA `RS256`/`RS384`/`RS512` or ECDSA `ES256`/`ES384`/`ES51
 (`public_key`) or signing keys fetched from a JWKS endpoint (`jwks_url`, which
 takes precedence when set).
 
+## Quick start
+
+This walks two setups end to end: first a token login for an account you create
+ahead of time, then role mapping with auto-provisioning, where a person's first
+login creates their account and grants their roles. The example values are for
+Microsoft Entra ID; [Provider settings](#provider-settings) gives the values
+for other providers and names the app registrations Entra needs.
+
+Prerequisites: a server started with `--vsql_allow_preview_extensions=ON` (on a
+running server, `SET PERSIST vsql_allow_preview_extensions = ON` takes effect at
+once). If you installed VillageSQL with the install script, the Docker image, or
+a release tarball, `vsql_oauth2.veb` is already in the server's `veb_dir`
+directory (`SHOW VARIABLES LIKE 'veb_dir'` shows where that is), so there is
+nothing to download. On a bare source build, build the VEB and copy it into
+`veb_dir` first (see [Build](#build)).
+
+### Log in with a token instead of a password
+
+```sql
+INSTALL EXTENSION vsql_oauth2;
+
+SET GLOBAL vsql_oauth2.issuer   = 'https://login.microsoftonline.com/<tenant-guid>/v2.0';
+SET GLOBAL vsql_oauth2.jwks_url = 'https://login.microsoftonline.com/<tenant-guid>/discovery/v2.0/keys';
+SET GLOBAL vsql_oauth2.audience = '<database-app-client-id>';
+SET GLOBAL vsql_oauth2.username_claim = 'preferred_username';
+
+CREATE USER oauth_user IDENTIFIED WITH vsql_oauth2;
+CREATE USER 'dana@myco.example';
+GRANT SELECT ON *.* TO 'dana@myco.example';
+GRANT PROXY ON 'dana@myco.example' TO oauth_user;
+```
+
+`jwks_url` points at the provider's key endpoint; the extension fetches the
+signing keys from it and refreshes them on an interval, an hour by default, so
+the provider can rotate keys without a database change. Point `audience` at the
+app registration that stands for the database, and send Entra's access token for
+that app rather than the `id_token` — only the access token carries App Roles
+under the readable names the second setup filters on. The client logs in with
+the token where the password would normally go ([Logging in](#logging-in)
+covers the ways to send one):
+
+```
+$ MYSQL_PWD='<the JWT>' mysql --enable-cleartext-plugin --user=oauth_user \
+    -e "SELECT CURRENT_USER(), @@external_user;"
++---------------------+-------------------+
+| CURRENT_USER()      | @@external_user   |
++---------------------+-------------------+
+| dana@myco.example@% | dana@myco.example |
++---------------------+-------------------+
+```
+
+You connect as `oauth_user`, which is bound to the extension and holds no
+privileges of its own; `username_claim` says which claim names the account to
+run as, and `GRANT PROXY` is what allows the switch. The session runs with
+`dana@myco.example`'s privileges, and `@@external_user` keeps the token identity
+for the audit trail. The token travels in cleartext at the protocol level, so
+use TLS.
+
+### Map provider roles, provision accounts on first login
+
+The extension can also take its cues from the roles the provider put in the
+token. Tell it which claim to read and how to rewrite the names, then create
+the roles those values map onto:
+
+```sql
+SET GLOBAL vsql_oauth2.roles_claim = 'roles';
+SET GLOBAL vsql_oauth2.roles_filter = 'mysql-grp-.*';
+SET GLOBAL vsql_oauth2.roles_transform_pattern = '-';
+SET GLOBAL vsql_oauth2.roles_transform_replacement = '_';
+SET GLOBAL vsql_oauth2.auto_create = ON;
+SET GLOBAL vsql_oauth2.auto_grant = ON;
+
+CREATE ROLE mysql_grp_dba;
+```
+
+The two transform settings rewrite each matched value before it becomes a role
+name (`mysql-grp-dba` → `mysql_grp_dba`). Now someone this database has never
+seen logs in with a token carrying `preferred_username: alice@myco.example` and
+`roles: ["mysql-grp-dba"]`:
+
+```
+$ MYSQL_PWD='<her JWT>' mysql --enable-cleartext-plugin --user='alice@myco.example' \
+    -e "SELECT CURRENT_USER(); SELECT CURRENT_ROLE();"
++----------------------+
+| CURRENT_USER()       |
++----------------------+
+| alice@myco.example@% |
++----------------------+
++---------------------+
+| CURRENT_ROLE()      |
++---------------------+
+| `mysql_grp_dba`@`%` |
++---------------------+
+```
+
+One login created the account, granted the role her claim entitles her to, and
+activated it for the session. An auto-created account runs as itself, so this
+path needs no proxy grant. Alice had no account, so `auto_create` did all of it;
+`auto_grant` covers someone who already has an account, granting the roles their
+token claims at each login. Both default to `OFF` and work independently; enable
+them only where you trust the token issuer with that authority
+([Auto-provisioning](#auto-provisioning)).
+
 ## How it works
 
 - The extension registers the auth method `vsql_oauth2`.
@@ -70,8 +173,10 @@ SET GLOBAL vsql_oauth2.audience = 'my-app-client-id';
 SET GLOBAL vsql_oauth2.username_claim = 'email';
 ```
 
-Create an account bound to the method. The identity the token maps to must exist
-as an account, and the connecting account must be allowed to proxy onto it:
+Create an account bound to the method. Unless `auto_create` is on (see
+[Auto-provisioning](#auto-provisioning)), the identity the token maps to must
+exist as an account, and the connecting account must be allowed to proxy onto
+it:
 
 ```sql
 CREATE USER oidc_user IDENTIFIED WITH vsql_oauth2;
@@ -289,8 +394,9 @@ The token drives **which roles are active**, never what they grant:
   <account>;`). The token only selects which already-granted roles are active
   for the session.
 - Activation is **grant-checked**: a role named by the token that is *not*
-  granted to the account is silently skipped (logged server-side) — a token can
-  never activate a role, or gain a privilege, the DBA did not provision.
+  granted to the account is silently skipped (logged server-side) — with
+  `auto_grant` off, a token can never activate a role, or gain a privilege, the
+  DBA did not provision (see [Auto-provisioning](#auto-provisioning)).
 - A bad `roles_filter`/`roles_transform` regex maps to **no** roles (fail closed
   on authorization). A token that carries no matching roles leaves the account's
   default roles in effect.
