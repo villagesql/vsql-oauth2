@@ -188,6 +188,68 @@ level — use TLS to the server.
 | `vsql_oauth2.auto_create` | `OFF` | When `ON`, a valid-token login for an account that does not exist creates it (`CREATE USER ... IDENTIFIED WITH vsql_oauth2`), grants it the token's mapped roles, then runs as the new account. See [Auto-provisioning](#auto-provisioning). |
 | `vsql_oauth2.auto_grant` | `OFF` | When `ON`, the token's mapped roles that exist as DB roles are granted to an existing account on each login, so a claimed role the account was not granted takes effect. When `OFF`, roles are only activated if already granted. See [Auto-provisioning](#auto-provisioning). |
 
+## Provider settings
+
+The `issuer` and `jwks_url` values below were read from each provider's own
+discovery document, not transcribed. Read yours the same way rather than
+trusting a copy that may have aged.
+
+### Microsoft Entra ID
+
+| Setting | Value |
+|---|---|
+| `issuer` | `https://login.microsoftonline.com/<tenant-guid>/v2.0` |
+| `jwks_url` | `https://login.microsoftonline.com/<tenant-guid>/discovery/v2.0/keys` |
+| `audience` | client id of the app registration that represents the database |
+| `username_claim` | `preferred_username` |
+| `roles_claim` | `roles` |
+
+Send the **access token** audienced to the database's app registration, not the
+`id_token`. App Roles arrive in the access token's `roles` claim under the
+readable names you assigned, which `roles_filter` can match; the `id_token`
+carries group object-id GUIDs instead. `tools/vsql_entra_login.py` requests the
+right token and lists the app-registration prerequisites, and it also sets
+`roles_filter` to `mysql-grp-.*` with `-` rewritten to `_`, so an App Role named
+`mysql-grp-trading` becomes the database role `mysql_grp_trading`.
+
+Entra publishes several keys in one document, alongside fields this extension
+does not read (`x5c`, `x5t`, `issuer`, `cloud_instance_name`, and no `alg`). It
+parses cleanly and sits well inside the fetch size cap.
+
+### Google
+
+| Setting | Value |
+|---|---|
+| `issuer` | `https://accounts.google.com` |
+| `jwks_url` | `https://www.googleapis.com/oauth2/v3/certs` |
+| `audience` | your OAuth client id |
+| `username_claim` | `email` |
+| `roles_claim` | leave empty |
+
+A native Google account carries **no** group or role claim, so role mapping
+cannot apply here at all (see [Roles](#roles)). Authorize on the identity
+instead, and read `hd` to confirm the Workspace domain.
+`tools/vsql_google_login.py` runs the browser flow.
+
+### Any other provider
+
+The provider publishes the first two settings. Ask it:
+
+```bash
+curl -s https://<provider-base>/.well-known/openid-configuration \
+  | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d["issuer"]);print(d["jwks_uri"])'
+```
+
+Keycloak, for instance, answers with `<base>/realms/<realm>` and
+`<base>/realms/<realm>/protocol/openid-connect/certs`.
+
+Then decode a real token and choose the two claims from what it actually
+carries. **`username_claim` and `roles_claim` must name top-level claims.** The
+extension looks a claim up by name rather than by path, so a claim nested inside
+another object cannot be reached, and a provider that nests its role list needs
+a mapper that emits a flat claim. `roles_claim` accepts either a single string
+or an array of strings.
+
 ## Auto-provisioning
 
 By default the DBA owns accounts and grants: an unknown account is rejected, and
