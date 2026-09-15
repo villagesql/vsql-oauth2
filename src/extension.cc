@@ -220,7 +220,7 @@ bool auto_grant_enabled() { return g_auto_grant; }
 // Decision to the auth context. Fail closed: only an explicit accept returns
 // AuthResult::kOk.
 vsql::preview_auth::AuthResult
-authenticate(vsql::preview_auth::AuthContext &c) {
+authenticate_impl(vsql::preview_auth::AuthContext &c) {
   using vsql::preview_auth::AuthResult;
 
   // Read the token. An empty span means the client disconnected or sent a
@@ -287,6 +287,27 @@ authenticate(vsql::preview_auth::AuthContext &c) {
                        static_cast<uint32_t>(role_ptrs.size()));
   }
   return AuthResult::kOk;
+}
+
+// Thin wrapper: authenticate_impl's own body does real allocating work
+// (std::string construction from the raw packet, build_config/
+// build_key_resolver's std::function/std::string copies, the two
+// std::vector<const char*> role-pointer buffers) outside of the
+// already-guarded evaluate()/map_roles()/JwksCache calls it makes. The VEF
+// SDK does not catch exceptions at the preview/auth entry-point boundary, so
+// an escaping bad_alloc here would crash the whole server rather than just
+// fail this one login -- fail closed on any exception, consistent with
+// every other rejection path in authenticate_impl.
+vsql::preview_auth::AuthResult
+authenticate(vsql::preview_auth::AuthContext &c) {
+  using vsql::preview_auth::AuthResult;
+  try {
+    return authenticate_impl(c);
+  } catch (const std::exception &) {
+    return AuthResult::kError;
+  } catch (...) {
+    return AuthResult::kError;
+  }
 }
 
 // The client-side auth plugin the server advertises as the default for this
