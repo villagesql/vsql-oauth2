@@ -3,7 +3,14 @@ on: [pull_request, workflow_dispatch]
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    # Pinned rather than ubuntu-latest. These tests run bin/mysql from the
+    # nightly dev server, which is built on Ubuntu 26.04 and needs glibc 2.42.
+    # ubuntu-latest is Ubuntu 24.04, which has glibc 2.39.
+    #
+    # Go back to ubuntu-latest once it can run the nightly server's mysql
+    # client: either the server is built against a compatible glibc, or
+    # ubuntu-latest moves to Ubuntu 26.04 or newer.
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       actions: read
