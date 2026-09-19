@@ -70,7 +70,11 @@ char *g_jwks_url = nullptr;
 long long g_jwks_refresh_interval = 3600;
 long long g_jwks_http_timeout = 5;
 bool g_auto_create = false;
-bool g_auto_grant = false;
+
+// auto_grant is an OFF/ON/SYNC enum; OFF/ON are the historical booleans, so the
+// old spellings still work. Index order matches vef_auth_roles_mode_t.
+const char *const g_auto_grant_names[] = {"OFF", "ON", "SYNC"};
+unsigned long g_auto_grant = 0; // default OFF (activate-only)
 
 auto SYS_VARS = sv::make_capability({
     sv::make_str("issuer",
@@ -129,18 +133,21 @@ auto SYS_VARS = sv::make_capability({
         "this lets a holder of a valid token tell an existing account from one "
         "that does not exist.",
         &g_auto_create, false),
-    sv::make_bool(
+    sv::make_enum(
         "auto_grant",
-        "When ON, the DB roles mapped from the token's roles_claim (after "
-        "roles_filter/roles_transform) that exist as DB roles are GRANTED to "
-        "the resolved account on each login, so a claimed role the account was "
-        "not granted takes effect. When OFF (default), roles are only "
-        "ACTIVATED "
+        "How the DB roles mapped from the token's roles_claim (after "
+        "roles_filter/roles_transform) reconcile with the resolved account's "
+        "grants, on each login. OFF (default): roles are only ACTIVATED "
         "grant-checked -- a claimed role not already granted is skipped, so "
         "the "
-        "token cannot escalate (the DBA owns grants). Independent of "
-        "auto_create.",
-        &g_auto_grant, false),
+        "token cannot escalate (the DBA owns grants). ON: those roles that "
+        "exist "
+        "as DB roles are also GRANTED, so a claimed role the account was not "
+        "granted takes effect. SYNC: the claimed roles become the account's "
+        "EXACT granted set -- grant the missing AND revoke every other granted "
+        "role (an empty claim revokes all), for when the token issuer is the "
+        "sole source of truth. Independent of auto_create.",
+        &g_auto_grant, g_auto_grant_names, /*def_val=*/0),
 });
 
 // Process-wide JWKS key cache, shared by all connections.
@@ -208,12 +215,14 @@ vsql_oauth2::Config build_config(vsql::preview_auth::AuthContext &c) {
 // "account does not exist -> access denied".
 bool auto_create_enabled() { return g_auto_create; }
 
-// Opt-in for granting the token's mapped roles to the resolved account, queried
-// live per login (so SET GLOBAL vsql_oauth2.auto_grant takes effect without
-// reinstalling). True has the server grant those roles; false keeps the default
-// where a claimed role that was not already granted is skipped. Independent of
-// auto_create.
-bool auto_grant_enabled() { return g_auto_grant; }
+// How the token's mapped roles reconcile with the resolved account's grants,
+// queried live per login (so SET GLOBAL vsql_oauth2.auto_grant takes effect
+// without reinstalling). The auto_grant enum's index order matches
+// vef_auth_roles_mode_t (OFF/ON/SYNC = ACTIVATE/GRANT/SYNC), so the stored
+// index is the mode verbatim. Independent of auto_create.
+vef_auth_roles_mode_t roles_mode_value() {
+  return static_cast<vef_auth_roles_mode_t>(g_auto_grant);
+}
 
 // The authenticator. Reads the JWT the client sent, hands it to
 // oauth_core::evaluate() for validation + claim->account mapping, and maps the
@@ -273,12 +282,17 @@ authenticate_impl(vsql::preview_auth::AuthContext &c) {
   c.authenticate_as(decision.account.c_str());
   c.set_external_user(decision.external_identity.c_str());
 
-  // Activate the roles mapped from the token's roles_claim (filter +
-  // transform). The server activates only those already granted to the account
-  // -- a role that is not granted is skipped, so the token cannot escalate.
-  // Skip the call entirely when role mapping is not configured (roles empty),
-  // so the account's default roles apply unchanged.
-  if (!decision.roles.empty()) {
+  // Stage the token's mapped roles as the session's active set (the server
+  // then activates grant-checked, and per auto_grant grants/revokes to match).
+  //
+  // Gate on roles_claim being CONFIGURED, not on the claim yielding any roles:
+  // a configured-but-empty claim stages an explicit empty set (SET ROLE NONE,
+  // and under SYNC the authoritative "no roles" that revokes all). Only an
+  // unset roles_claim skips the call, leaving the account's default roles
+  // untouched.
+  const bool roles_configured =
+      g_roles_claim != nullptr && g_roles_claim[0] != '\0';
+  if (roles_configured) {
     std::vector<const char *> role_ptrs;
     role_ptrs.reserve(decision.roles.size());
     for (const std::string &r : decision.roles)
@@ -344,7 +358,7 @@ constexpr auto AUTH_METHOD =
     vsql::preview_auth::make_auth<&authenticate>("vsql_oauth2")
         .client_plugin("mysql_clear_password")
         .auto_create(&auto_create_enabled)
-        .auto_grant(&auto_grant_enabled)
+        .roles_mode(&roles_mode_value)
         .accepts_client_plugin(&accepts_client_plugin)
         .build();
 // AuthCapability is non-copyable (it self-registers at a fixed address), so
