@@ -291,7 +291,7 @@ level — use TLS to the server.
 | `vsql_oauth2.roles_transform_pattern` | `''` | Regex rewritten (with the replacement) on each matched value. E.g. `-` to sanitize `mysql-grp-x`. Empty disables the transform. |
 | `vsql_oauth2.roles_transform_replacement` | `''` | Replacement for `roles_transform_pattern`. E.g. `_`. |
 | `vsql_oauth2.auto_create` | `OFF` | When `ON`, a valid-token login for an account that does not exist creates it (`CREATE USER ... IDENTIFIED WITH vsql_oauth2`), grants it the token's mapped roles, then runs as the new account. See [Auto-provisioning](#auto-provisioning). |
-| `vsql_oauth2.auto_grant` | `OFF` | When `ON`, the token's mapped roles that exist as DB roles are granted to an existing account on each login, so a claimed role the account was not granted takes effect. When `OFF`, roles are only activated if already granted. See [Auto-provisioning](#auto-provisioning). |
+| `vsql_oauth2.auto_grant` | `OFF` | `OFF`/`ON`/`SYNC`. `OFF`: roles are only activated if already granted (the DBA owns grants). `ON`: the token's mapped roles that exist as DB roles are also granted to an existing account on each login, so a claimed role the account was not granted takes effect. `SYNC`: the token's roles become the account's exact granted set — grant the missing **and revoke every other granted role** (an empty claim revokes all), for when the token issuer is the sole source of truth. `OFF`/`ON` also accept `0`/`1`. See [Auto-provisioning](#auto-provisioning). |
 
 ## Provider settings
 
@@ -367,14 +367,28 @@ effect without reinstalling):
   token's mapped roles, and runs as the new account. Roles must already exist as
   DB roles; an unknown role is skipped. Enabling this lets a holder of a valid
   token tell an existing account from one that does not exist.
-- **`auto_grant`** — the token's mapped roles that exist as DB roles are granted
-  to an **existing** account on each login, so a role the token claims but the
-  account was not granted takes effect instead of being skipped. Independent of
-  `auto_create` (grant-to-existing vs create-unknown).
+- **`auto_grant`** — an `OFF`/`ON`/`SYNC` mode governing how the token's mapped
+  roles reconcile with an **existing** account's grants on each login (`OFF`/`ON`
+  also accept the historical `0`/`1`). Independent of `auto_create`
+  (roles-on-existing vs create-unknown).
+  - `OFF` (default): roles are only *activated* if already granted — a claimed
+    role the account lacks is skipped, so the token cannot escalate.
+  - `ON`: those mapped roles that exist as DB roles are also *granted* to the
+    account, so a role the token claims but the account was not granted takes
+    effect instead of being skipped.
+  - `SYNC`: the token's roles become the account's **exact** granted set — grant
+    the ones it lacks **and revoke every other role it holds that the token did
+    not claim** (a token carrying no roles revokes them all). This makes the
+    token issuer the sole source of truth for the account's roles, so a role a
+    DBA granted out of band is revoked on the next login too. Use it only where
+    that is the intent. **Exception:** an account's **default roles** (set by an
+    operator with `ALTER USER … DEFAULT ROLE`) are never revoked — a deliberate
+    operator pin outranks the token. (An auto-created account has no default
+    role, so this only shields defaults an operator set explicitly.)
 
-Both hand role/account authority to the token issuer, so enable them only where
-the IdP and its claims are trusted to that degree. The server runs the DDL, not
-the extension.
+All of these hand role/account authority to the token issuer, so enable them
+only where the IdP and its claims are trusted to that degree. The server runs
+the DDL, not the extension.
 
 ## Roles
 
@@ -398,8 +412,11 @@ The token drives **which roles are active**, never what they grant:
   `auto_grant` off, a token can never activate a role, or gain a privilege, the
   DBA did not provision (see [Auto-provisioning](#auto-provisioning)).
 - A bad `roles_filter`/`roles_transform` regex maps to **no** roles (fail closed
-  on authorization). A token that carries no matching roles leaves the account's
-  default roles in effect.
+  on authorization). When `roles_claim` is **set** but a token carries no
+  matching roles, the token's authoritative set is *empty*: no roles are
+  activated (`SET ROLE NONE`), and under `auto_grant = SYNC` every granted role
+  is revoked. Only when `roles_claim` is **unset** (role mapping off entirely)
+  does a login leave the account's default roles in effect.
 
 Role activation requires no server configuration beyond a VillageSQL build that
 provides the `set_active_roles` auth op. Not all IdPs emit a usable claim: Entra

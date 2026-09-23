@@ -91,9 +91,14 @@ framing too. See README "Logging in".
 **Config (sysvars, `vsql_oauth2.*`):** `issuer`, `audience`, `public_key`,
 `jwks_url`, `jwks_refresh_interval`, `jwks_http_timeout`, `username_claim`,
 `roles_claim`, `roles_filter`, `roles_transform_pattern`,
-`roles_transform_replacement`, and `auto_create` (bool). Integer sysvars use
-`int64_t` backing globals to match the SDK's fixed-width ABI; `auto_create` uses
-a `bool` backing global via `sv::make_bool`.
+`roles_transform_replacement`, `auto_create` (bool), and `auto_grant`
+(`OFF`/`ON`/`SYNC` enum). Integer sysvars use `int64_t` backing globals to match
+the SDK's fixed-width ABI; `auto_create` uses a `bool` backing global via
+`sv::make_bool`; `auto_grant` uses an `unsigned long` backing global via
+`sv::make_enum`, its index order matching `vef_auth_roles_mode_t`
+(OFF/ON/SYNC = ACTIVATE/GRANT/SYNC) so the `roles_mode` callback returns it
+verbatim. `SYNC` makes the token's roles the account's exact granted set
+(grant missing + revoke unclaimed).
 
 **Fail closed:** any validation failure, missing key source, or malformed token
 denies the connection. Only an explicit accept authenticates.
@@ -141,8 +146,10 @@ All source files (`.cc`, `.h`) and `CMakeLists.txt` must carry this header:
   in `extension.cc`, thread it into `oauth_core::Config` in `build_config`, and
   consume it in `oauth_core.cc`. Type must match the factory: `int64_t*` for
   `make_int`, `char**` for `make_str`, `bool*` for `make_bool` (e.g.
-  `auto_create`). A knob queried live by the server per-login (like the
-  `auto_create_unknown_accounts` opt-in callback) reads the global directly.
+  `auto_create`), `unsigned long*` for `make_enum` (a fixed name list; e.g.
+  `auto_grant` OFF/ON/SYNC). A knob queried live by the server per-login (like
+  the `auto_create_unknown_accounts` or `roles_mode` opt-in callback) reads the
+  global directly.
 - **Changing validation**: edit `oauth_core::evaluate`; keep fail-closed —
   reject unknown algs before any signature check.
 - **Role mapping**: `roles_filter`/`roles_transform` in `oauth_core.cc`. Note
