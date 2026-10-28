@@ -1,0 +1,56 @@
+# Tests the jwks_fetch_failures status_var counter: a JWKS endpoint that
+# genuinely cannot be reached fails every login closed, and each failure
+# bumps vsql_oauth2.jwks_fetch_failures (visible via SHOW STATUS), giving
+# fleet-wide visibility into a misconfigured/down IdP endpoint without
+# grepping the error log for individual failed logins.
+#
+# $basic_valid (from oauth_fixtures.inc) is used purely for its well-formed
+# JWT *structure* -- evaluate() calls jwt::decode() and resolves the
+# verification key by the token's kid BEFORE any signature check (see
+# oauth_core.cc), so a syntactically valid token reaches the JWKS fetch and
+# is rejected there -- it never gets far enough to matter whose key it was
+# actually signed with.
+
+--source include/not_windows.inc
+--source oauth_fixtures.inc
+
+--let $valid_token= $basic_valid
+
+INSTALL EXTENSION vsql_oauth2;
+
+--disable_query_log
+# Port 1 is a privileged port essentially never listening in a test
+# environment, so curl gets an immediate connection-refused instead of
+# waiting out jwks_http_timeout.
+SET GLOBAL vsql_oauth2.jwks_url = 'http://127.0.0.1:1/jwks.json';
+SET GLOBAL vsql_oauth2.jwks_http_timeout = 1;
+--enable_query_log
+
+CREATE USER oauth_jwks_user IDENTIFIED WITH vsql_oauth2;
+
+--let $before = query_get_value(SHOW STATUS LIKE 'vsql_oauth2.jwks_fetch_failures', Value, 1)
+
+--echo #
+--echo # An unreachable JWKS endpoint fails the login closed; the cache never
+--echo # has usable keys to fall back on (the very first fetch already
+--echo # failed), so every attempt below independently fails and counts.
+--echo #
+--error 1
+--exec $MYSQL --enable_cleartext_plugin --user=oauth_jwks_user --password=$valid_token -e "SELECT 1" 2>&1
+--error 1
+--exec $MYSQL --enable_cleartext_plugin --user=oauth_jwks_user --password=$valid_token -e "SELECT 1" 2>&1
+
+--let $after = query_get_value(SHOW STATUS LIKE 'vsql_oauth2.jwks_fetch_failures', Value, 1)
+
+--echo #
+--echo # Two failed logins above -> the counter advanced by exactly two.
+--echo #
+--disable_query_log
+--eval SELECT $after - $before AS jwks_fetch_failures_delta
+--enable_query_log
+
+--echo #
+--echo # Cleanup.
+--echo #
+DROP USER oauth_jwks_user;
+UNINSTALL EXTENSION vsql_oauth2;

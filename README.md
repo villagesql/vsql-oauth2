@@ -293,6 +293,12 @@ level — use TLS to the server.
 | `vsql_oauth2.auto_create` | `OFF` | When `ON`, a valid-token login for an account that does not exist creates it (`CREATE USER ... IDENTIFIED WITH vsql_oauth2`), grants it the token's mapped roles, then runs as the new account. See [Auto-provisioning](#auto-provisioning). |
 | `vsql_oauth2.auto_grant` | `OFF` | `OFF`/`ON`/`SYNC`. `OFF`: roles are only activated if already granted (the DBA owns grants). `ON`: the token's mapped roles that exist as DB roles are also granted to an existing account on each login, so a claimed role the account was not granted takes effect. `SYNC`: the token's roles become the account's exact granted set — grant the missing **and revoke every other granted role** (an empty claim revokes all), for when the token issuer is the sole source of truth. `OFF`/`ON` also accept `0`/`1`. See [Auto-provisioning](#auto-provisioning). |
 
+## Status variables
+
+| Variable | Description |
+|----------|-------------|
+| `vsql_oauth2.jwks_fetch_failures` | Logins that failed because the JWKS fetch failed and no cached keys were left to use. A failed refresh that falls back to cached keys does not count. |
+
 ## Provider settings
 
 The `issuer` and `jwks_url` values below were read from each provider's own

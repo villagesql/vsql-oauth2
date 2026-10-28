@@ -44,6 +44,7 @@
 #include <vector>
 
 #include <villagesql/preview/auth.h>
+#include <villagesql/preview/status_var.h>
 #include <villagesql/preview/sys_var.h>
 #include <villagesql/vsql.h>
 
@@ -52,6 +53,7 @@
 
 using namespace vsql;
 namespace sv = vsql::preview_sys_var;
+namespace svar = vsql::preview_status_var;
 
 namespace {
 
@@ -148,6 +150,11 @@ auto SYS_VARS = sv::make_capability({
         "role (an empty claim revokes all), for when the token issuer is the "
         "sole source of truth. Independent of auto_create.",
         &g_auto_grant, g_auto_grant_names, /*def_val=*/0),
+});
+
+// Shown in SHOW STATUS as vsql_oauth2.jwks_fetch_failures.
+auto STATUS_VARS = svar::make_capability({
+    svar::make_int("jwks_fetch_failures", &vsql_oauth2::g_jwks_fetch_failures),
 });
 
 // Process-wide JWKS key cache, shared by all connections.
@@ -367,4 +374,5 @@ vsql::preview_auth::AuthCapability g_auth{AUTH_METHOD};
 
 } // namespace
 
-VEF_GENERATE_ENTRY_POINTS(make_extension().with(g_auth).with(SYS_VARS))
+VEF_GENERATE_ENTRY_POINTS(
+    make_extension().with(g_auth).with(SYS_VARS).with(STATUS_VARS))

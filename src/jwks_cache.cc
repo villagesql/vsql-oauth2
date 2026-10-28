@@ -22,6 +22,8 @@
 
 namespace vsql_oauth2 {
 
+long long g_jwks_fetch_failures = 0;
+
 namespace {
 
 // Cap the JWKS response we will buffer. Real JWKS documents are a few KB (a
@@ -139,8 +141,10 @@ JwksCache::Status JwksCache::lookup_pem(const std::string &jwks_url,
     if (!refresh_locked(jwks_url, http_timeout_secs, now, error_detail)) {
       // If we still have usable cached keys from a prior fetch, fall back to
       // them rather than failing on a transient fetch error.
-      if (kid_to_pem_.empty())
+      if (kid_to_pem_.empty()) {
+        __atomic_fetch_add(&g_jwks_fetch_failures, 1, __ATOMIC_RELAXED);
         return Status::FETCH_FAILED;
+      }
     }
   }
 

@@ -22,6 +22,9 @@
 
 namespace vsql_oauth2 {
 
+// Count of logins that failed because no JWKS keys could be fetched or cached.
+extern long long g_jwks_fetch_failures;
+
 // Caches IdP signing keys fetched from a JWKS endpoint, mapping each key id
 // (kid) to a PEM-encoded public key. Verification keys rotate, so the cache
 // refreshes on a TTL and on a kid miss (forced refetch). Thread-safe: many

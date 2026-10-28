@@ -1,0 +1,21 @@
+INSTALL EXTENSION vsql_oauth2;
+CREATE USER oauth_jwks_user IDENTIFIED WITH vsql_oauth2;
+#
+# An unreachable JWKS endpoint fails the login closed; the cache never
+# has usable keys to fall back on (the very first fetch already
+# failed), so every attempt below independently fails and counts.
+#
+mysql: [Warning] Using a password on the command line interface can be insecure.
+ERROR 1045 (28000): Access denied for user 'oauth_jwks_user'@'localhost' (using password: NO)
+mysql: [Warning] Using a password on the command line interface can be insecure.
+ERROR 1045 (28000): Access denied for user 'oauth_jwks_user'@'localhost' (using password: NO)
+#
+# Two failed logins above -> the counter advanced by exactly two.
+#
+jwks_fetch_failures_delta
+2
+#
+# Cleanup.
+#
+DROP USER oauth_jwks_user;
+UNINSTALL EXTENSION vsql_oauth2;
