@@ -407,12 +407,27 @@ mapped to database roles and **activated on the session**:
    (e.g. `-`→`_`, turning `mysql-grp-trading` into a valid role name).
 4. Activate the resulting roles on the session — `CURRENT_ROLE()` reflects them.
 
-The token drives **which roles are active**, never what they grant:
+The token drives **which roles an account has**, never what those roles grant:
 
 - The database is the source of truth for privileges. **The DBA must create each
-  role and grant it to the account** (`CREATE ROLE trading; GRANT trading TO
-  <account>;`). The token only selects which already-granted roles are active
-  for the session.
+  role and grant it its privileges** (`CREATE ROLE trading; GRANT SELECT ON
+  trading.* TO trading;`). A token can never create a role or change what a role
+  grants: to give users access to another database, change the role's grants
+  (or have the IdP send a different role that already has that access).
+- A role's schema scope is fixed inside the role. MySQL roles are global and
+  unparameterized: `GRANT trading TO <account>;` has no `ON` clause, so there
+  is no "role X on schema Y" assignment. To express function × schema, define
+  one role per combination (`db1_read`, `db2_read`, `db2_write`) and have the
+  IdP group name that combination (e.g. `mysql-grp-db2-read` → `db2_read` via
+  `roles_filter`/`roles_transform`). The token cannot carry a role and a schema
+  separately for the server to combine.
+- Who holds a role depends on `auto_grant`:
+  - `OFF` (default): the DBA also grants each role to the account (`GRANT
+    trading TO <account>;`). The token only selects which already-granted roles
+    are active for the session.
+  - `ON`: the token's mapped roles that exist as DB roles are granted to the
+    account on login, so role membership is managed in the IdP and no
+    per-account `GRANT trading TO <account>;` is needed.
 - Activation is **grant-checked**: a role named by the token that is *not*
   granted to the account is silently skipped (logged server-side) — with
   `auto_grant` off, a token can never activate a role, or gain a privilege, the
