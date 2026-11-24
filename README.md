@@ -137,8 +137,7 @@ configure time) over OpenSSL; no server-side JWT primitive is required.
 
 ## Prerequisites
 
-- A VillageSQL build directory (`VillageSQL_BUILD_DIR`) whose server includes the
-  VEF auth capability.
+- A VillageSQL build directory (`VillageSQL_BUILD_DIR`), 0.0.8 or newer.
 - CMake 3.16+, a C++17 compiler.
 - OpenSSL development headers (present wherever the server builds).
 - libcurl development headers — the JWKS fetch uses libcurl, and CMake fails the

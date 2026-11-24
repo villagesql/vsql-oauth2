@@ -21,10 +21,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Extension name
 set(EXTENSION_NAME "vsql_oauth2")
 
-# Find VillageSQL SDK. Builds against the default (stable) header tree: this
-# extension's three preview capabilities (vsql::preview::auth,
-# vsql::preview::status_var, vsql::preview::sys_var) are all part of the
-# stable protocol as of SDK v0.0.8 -- no dev-headers opt-in needed.
+# Find VillageSQL SDK. As of SDK v0.0.8 the default include/ tree ships the
+# headers for this extension's three preview capabilities (vsql::preview::auth,
+# vsql::status_var, vsql::sys_var), so no dev-headers opt-in is needed. They
+# are still preview capabilities: their API and ABI may change.
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 find_package(VillageSQL REQUIRED)
 
@@ -110,9 +110,7 @@ add_library(vsql_oauth2 SHARED
 target_compile_options(vsql_oauth2 PRIVATE -fPIC)
 
 # SDK headers, plus jwt-cpp as a SYSTEM include so its header warnings do not
-# fail a maintainer-mode build. Use VillageSQL_INCLUDE_DIR (honors
-# VillageSQL_USE_DEV_HEADERS) rather than the Framework config's include dir,
-# which always points at the stable tree and would miss the preview headers.
+# fail a maintainer-mode build.
 target_include_directories(vsql_oauth2 PRIVATE
     ${VillageSQL_INCLUDE_DIR}
 )
