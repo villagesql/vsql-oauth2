@@ -21,11 +21,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Extension name
 set(EXTENSION_NAME "vsql_oauth2")
 
-# Find VillageSQL SDK.
-# This extension uses a preview capability (vsql::preview::auth), whose headers
-# ship in the SDK's include-dev/ tree. Request the dev headers before
-# find_package, exactly as the preview-using example extensions do.
-set(VillageSQL_USE_DEV_HEADERS ON)
+# Find VillageSQL SDK. Builds against the default (stable) header tree: this
+# extension's three preview capabilities (vsql::preview::auth,
+# vsql::preview::status_var, vsql::preview::sys_var) are all part of the
+# stable protocol as of SDK v0.0.8 -- no dev-headers opt-in needed.
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 find_package(VillageSQL REQUIRED)
 

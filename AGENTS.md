@@ -38,10 +38,10 @@ no external IdP). See `TESTING.md` for the manual MTR command as well.
 
 ### Dependencies
 
-- VillageSQL Extension Framework SDK — **preview** headers (`include-dev/`), for
-  the `vsql::preview::auth` and `vsql::preview::sys_var` capabilities. The
-  bundled `cmake/FindVillageSQL.cmake` selects `include-dev/` when
-  `VillageSQL_USE_DEV_HEADERS` is ON (set in `CMakeLists.txt`).
+- VillageSQL Extension Framework SDK — **preview** capabilities
+  (`vsql::preview::auth`, `vsql::preview::status_var`, `vsql::preview::sys_var`).
+  These ship in the SDK's default `include/` tree as of v0.0.8, so no
+  `cmake/FindVillageSQL.cmake` dev-headers opt-in is needed.
 - OpenSSL (`libssl-dev`) — RS256/ES256 signature verification behind jwt-cpp.
 - libcurl (`libcurl4-openssl-dev`) — JWKS fetch from the IdP.
 - jwt-cpp — header-only, fetched at configure time via CMake `FetchContent`
