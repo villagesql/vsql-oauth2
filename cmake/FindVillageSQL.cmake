@@ -263,10 +263,11 @@ endif()
 
 unset(_villagesql_found)
 
-# Switch to include-dev/ if requested and available.
+# Switch to include-dev/ if requested and available. VSQL_USE_DEV_ABI is the
+# SDK's own switch for the dev headers, which the compatibility CI passes.
 option(VillageSQL_USE_DEV_HEADERS
   "Use include-dev/ headers for pre-release ABI features" OFF)
-if(VillageSQL_USE_DEV_HEADERS AND VillageSQL_PREFIX)
+if((VillageSQL_USE_DEV_HEADERS OR VSQL_USE_DEV_ABI) AND VillageSQL_PREFIX)
   set(_dev_include "${VillageSQL_PREFIX}/include-dev")
   if(EXISTS "${_dev_include}/villagesql/extension.h")
     set(VillageSQL_INCLUDE_DIR "${_dev_include}")
